@@ -38,14 +38,14 @@ body {
 }
 
 .container {
-    max-width: 1400px;
+    max-width: 1600px;
     margin: 0 auto;
     padding: 20px;
     width: 100%;
     min-width: 320px;
 }
 
-/* ========== Header ========== */
+/* ========== HEADER ========== */
 .header {
     background: var(--bg-card);
     border-radius: var(--border-radius);
@@ -79,6 +79,48 @@ body {
     background-clip: text;
 }
 
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 25px;
+    flex-wrap: wrap;
+}
+
+.calibration-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--bg-light);
+    border-radius: 30px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    border: 1px solid transparent;
+    transition: var(--transition);
+}
+
+.calibration-badge i {
+    font-size: 1.1rem;
+}
+
+.calibration-badge.calibrated {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: var(--success-color);
+    color: var(--success-color);
+}
+
+.calibration-badge.not-calibrated {
+    background: rgba(245, 158, 11, 0.15);
+    border-color: var(--warning-color);
+    color: var(--warning-color);
+}
+
+.calibration-badge.in-progress {
+    background: rgba(37, 99, 235, 0.15);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
 .device-info {
     display: flex;
     gap: 20px;
@@ -86,79 +128,34 @@ body {
     flex-wrap: wrap;
 }
 
-/* ========== System Status ========== */
-.system-status {
-    background: var(--bg-card);
-    border-radius: var(--border-radius);
-    padding: 20px;
-    margin-bottom: 20px;
-    box-shadow: var(--box-shadow);
-}
-
-.status-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 15px;
-}
-
-.status-item {
+/* ========== ОСНОВНА СІТКА (2 ряди) ========== */
+.main-grid {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 15px;
-    background: var(--bg-light);
-    border-radius: 8px;
-    border-left: 4px solid var(--primary-color);
-}
-
-.status-label {
-    color: var(--text-secondary);
-    font-weight: 500;
-    flex: 1;
-}
-
-.status-value {
-    color: var(--text-primary);
-    font-family: 'Orbitron', sans-serif;
-    font-size: 1rem;
-    font-weight: 700;
-    text-align: right;
-    flex: 1;
-}
-
-/* ========== ГОЛОВНА СІТКА (десктоп) ========== */
-.main-content {
-    display: grid;
-    grid-template-columns: 2fr 1fr;
-    grid-template-areas: 
-        "setup   enddate"
-        "bothrow imit"
-        ".       .";
+    flex-direction: column;
     gap: 30px;
     margin-bottom: 30px;
 }
 
-.grid-area-setup   { grid-area: setup; }
-.grid-area-enddate { grid-area: enddate; }
-.grid-area-bothrow { grid-area: bothrow; }
-.grid-area-imit    { grid-area: imit; }
-
-/* Контейнер для двох блоків поруч (тривалість + синхронізація) */
-.two-panels-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+.grid-row {
+    display: flex;
+    flex-wrap: wrap;
     gap: 30px;
 }
 
-/* Усі панелі */
+.grid-col {
+    display: flex;
+    flex-direction: column;
+    min-width: 200px; /* запобігає занадто вузьким колонкам */
+}
+
+/* ========== СПІЛЬНІ СТИЛІ ДЛЯ ПАНЕЛЕЙ ========== */
 .panel-section {
     background: var(--bg-card);
     border-radius: var(--border-radius);
     padding: 25px;
     box-shadow: var(--box-shadow);
     width: 100%;
-    /* Однакова мінімальна висота для вирівнювання */
-    min-height: 380px;
+    height: 100%;
     display: flex;
     flex-direction: column;
 }
@@ -167,7 +164,7 @@ body {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 25px;
+    margin-bottom: 20px;
     font-size: 1.4rem;
     color: var(--text-primary);
     border-bottom: 2px solid var(--primary-color);
@@ -183,67 +180,34 @@ body {
     color: var(--text-primary);
 }
 
-/* ========== МОБІЛЬНЕ КОМПОНУВАННЯ ========== */
-@media (max-width: 992px) {
-    .main-content {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-    }
-
-    .two-panels-row {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-    }
-
-    .panel-section {
-        min-height: auto; /* скидаємо фіксовану висоту */
-    }
-
-    /* Зменшуємо розміри цифр для "Тривалість відліку" на телефонах */
-    .test-digits .digit-number {
-        width: 55px;
-        height: 80px;
-        font-size: 2.2rem;
-    }
-
-    .digit-controls {
-        width: 55px;
-    }
-
-    .digit-btn {
-        padding: 8px;
-    }
-
-    .test-labels span {
-        font-size: 0.8rem;
-        padding: 6px 3px;
-    }
+/* ========== ВСТАНОВЛЕННЯ ВІДЛІКУ ========== */
+.current-time-compact {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0,0,0,0.3);
+    padding: 12px 18px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    border-left: 4px solid var(--primary-color);
 }
 
-@media (max-width: 480px) {
-    .test-digits .digit-number {
-        width: 45px;
-        height: 65px;
-        font-size: 1.8rem;
-    }
-
-    .digit-controls {
-        width: 45px;
-    }
-
-    .digit-btn {
-        padding: 6px;
-    }
+.current-time-compact i {
+    color: var(--primary-color);
+    font-size: 1.2rem;
 }
 
-/* ========== Time Setup ========== */
+.current-time-value {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
 .time-setup {
     display: flex;
     flex-direction: column;
     gap: 25px;
-    margin-top: 15px;
     flex: 1;
 }
 
@@ -290,7 +254,65 @@ body {
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-/* ========== Тривалість відліку (тестові цифри) ========== */
+/* ========== ДАТА ЗАВЕРШЕННЯ ========== */
+.end-date-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    flex: 1;
+}
+
+.end-date-main, .remaining-main, .remaining-detailed {
+    background: rgba(0,0,0,0.2);
+    padding: 15px 20px;
+    border-radius: 10px;
+    border-left: 4px solid var(--primary-color);
+}
+
+.end-date-label, .remaining-label, .detailed-label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.end-date-value {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--primary-color);
+    word-break: break-word;
+}
+
+.remaining-value {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--success-color);
+}
+
+.detailed-value {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.2rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+/* ========== КНОПКИ КЕРУВАННЯ ========== */
+.action-buttons-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.action-buttons-stack .btn {
+    width: 100%;
+    justify-content: center;
+    padding: 15px;
+    font-size: 1.1rem;
+}
+
+/* ========== ТРИВАЛІСТЬ ВІДЛІКУ (ЦИФРИ) ========== */
 .test-display {
     background: rgba(0, 0, 0, 0.5);
     border-radius: 10px;
@@ -364,16 +386,6 @@ body {
         0 12px 25px rgba(0, 0, 0, 0.4);
 }
 
-.digit-number::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-}
-
 .digit-controls {
     display: flex;
     flex-direction: column;
@@ -400,73 +412,7 @@ body {
     transform: translateY(-2px);
 }
 
-.digit-btn.up:hover {
-    color: var(--success-color);
-}
-
-.digit-btn.down:hover {
-    color: var(--warning-color);
-}
-
-.test-actions {
-    display: flex;
-    justify-content: center;
-    margin-top: 20px;
-}
-
-/* ========== Синхронізація з NTP ========== */
-.sync-controls {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-
-.hour-selector-digits {
-    margin-top: 15px;
-}
-
-/* Чекбокс */
-.checkbox-label {
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-    color: var(--text-primary);
-    font-size: 0.95rem;
-    margin-bottom: 15px;
-    user-select: none;
-}
-
-.checkbox-label input {
-    display: none;
-}
-
-.checkmark {
-    width: 20px;
-    height: 20px;
-    background: var(--bg-light);
-    border-radius: 4px;
-    margin-right: 10px;
-    position: relative;
-    transition: var(--transition);
-}
-
-.checkbox-label input:checked + .checkmark {
-    background: var(--primary-color);
-}
-
-.checkbox-label input:checked + .checkmark::after {
-    content: '';
-    position: absolute;
-    left: 7px;
-    top: 3px;
-    width: 6px;
-    height: 10px;
-    border: solid white;
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
-}
-
-/* ========== Імітація дисплея ========== */
+/* ========== ІМІТАЦІЯ ДИСПЛЕЯ ========== */
 .display-simulation {
     background: rgba(0, 0, 0, 0.5);
     border-radius: 10px;
@@ -523,81 +469,140 @@ body {
     transition: var(--transition);
 }
 
-.digit-sim::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+/* ========== ТИП ВІДЛІКУ (ОДИНИЦІ) ========== */
+.unit-selector-panel {
+    min-height: 220px;
+    display: flex;
+    flex-direction: column;
 }
 
-/* ========== Дата завершення ========== */
-.end-date-display {
-    background: linear-gradient(135deg, rgba(37, 99, 235, 0.1), rgba(124, 58, 237, 0.1));
-    border-radius: var(--border-radius);
-    padding: 25px;
-    border: 2px solid var(--primary-color);
-    box-shadow: 0 0 20px rgba(37, 99, 235, 0.2);
+.unit-selector {
     flex: 1;
     display: flex;
-    align-items: center;
+    flex-direction: column;
 }
 
-.date-display-wrapper {
+.unit-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 10px 0 20px;
+}
+
+.unit-card {
+    background: rgba(0, 0, 0, 0.4);
+    border: 2px solid var(--bg-light);
+    border-radius: 12px;
+    padding: 12px 10px;
     display: flex;
     align-items: center;
-    gap: 20px;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: var(--transition);
 }
 
-.date-icon {
-    font-size: 2.5rem;
-    color: var(--primary-color);
+.unit-card:hover {
+    border-color: var(--primary-color);
+    background: rgba(37, 99, 235, 0.15);
+    transform: translateY(-2px);
 }
 
-.date-content {
-    flex: 1;
+.unit-card.active {
+    border-color: var(--primary-color);
+    background: rgba(37, 99, 235, 0.25);
+    box-shadow: 0 0 15px rgba(37, 99, 235, 0.4);
 }
 
-.date-label {
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-    margin-bottom: 8px;
-}
-
-.date-value {
+.unit-digit {
     font-family: 'Orbitron', sans-serif;
-    font-size: 1.4rem;
+    font-size: 1.8rem;
     font-weight: 700;
     color: var(--primary-color);
-    margin-bottom: 12px;
-    text-shadow: 0 0 10px rgba(37, 99, 235, 0.5);
+    text-shadow: 0 0 8px rgba(37, 99, 235, 0.5);
 }
 
-/* ========== Кнопки дій ========== */
-.actions-bottom {
-    background: var(--bg-card);
-    border-radius: var(--border-radius);
-    padding: 25px;
-    margin-top: 30px;
-    box-shadow: var(--box-shadow);
+.unit-label {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
 }
 
-.action-buttons {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 15px;
+.unit-hint {
+    margin-top: auto;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    padding-top: 15px;
+    border-top: 1px solid var(--bg-light);
 }
 
-@media (max-width: 768px) {
-    .action-buttons {
-        grid-template-columns: 1fr;
-    }
+/* ========== СИНХРОНІЗАЦІЯ З NTP ========== */
+.sync-controls {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
 }
 
+.hour-selector-digits {
+    margin-top: 15px;
+}
+
+.hour-selector-digits .test-digits {
+    margin: 10px 0;
+}
+
+/* ========== ЧЕКБОКСИ ========== */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    margin-bottom: 15px;
+    user-select: none;
+    position: relative;
+    padding-left: 30px;
+}
+
+.checkbox-label input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.checkmark {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    background: var(--bg-light);
+    border-radius: 4px;
+    transition: var(--transition);
+}
+
+.checkbox-label input:checked + .checkmark {
+    background: var(--primary-color);
+}
+
+.checkbox-label input:checked + .checkmark::after {
+    content: '';
+    position: absolute;
+    left: 7px;
+    top: 3px;
+    width: 6px;
+    height: 10px;
+    border: solid white;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+/* ========== КНОПКИ (ЗАГАЛЬНІ) ========== */
 .btn {
-    padding: 15px 25px;
+    padding: 12px 24px;
     border: none;
     border-radius: 10px;
     font-size: 1rem;
@@ -637,7 +642,12 @@ body {
     color: white;
 }
 
-/* ========== Footer ========== */
+.btn-success {
+    background: linear-gradient(135deg, var(--success-color), #059669);
+    color: white;
+}
+
+/* ========== FOOTER ========== */
 .footer {
     margin-top: 30px;
     padding: 20px;
@@ -647,16 +657,12 @@ body {
     border-top: 1px solid var(--bg-light);
 }
 
-.footer p {
-    margin: 5px 0;
-}
-
 .update-info {
     font-size: 0.8rem;
     color: var(--text-muted);
 }
 
-/* ========== Toast ========== */
+/* ========== TOAST ========== */
 #toast-container {
     position: fixed;
     top: 20px;
@@ -686,6 +692,12 @@ body {
     border-left-color: var(--warning-color);
 }
 
+.info-hint {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-left: 10px;
+}
+
 @keyframes slideIn {
     from {
         transform: translateX(100%);
@@ -701,4 +713,102 @@ body {
     0% { transform: rotateX(0deg); }
     50% { transform: rotateX(90deg); opacity: 0.5; }
     100% { transform: rotateX(0deg); opacity: 1; }
+}
+
+/* ========== АДАПТАЦІЯ ДЛЯ МОБІЛЬНИХ ========== */
+@media (max-width: 1200px) {
+    .grid-row {
+        flex-wrap: wrap;
+    }
+    .grid-col {
+        flex: 1 1 calc(50% - 15px) !important;
+        min-width: 280px;
+    }
+}
+
+@media (max-width: 768px) {
+    .container {
+        padding: 15px;
+    }
+    
+    .header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .logo h1 {
+        font-size: 1.4rem;
+    }
+    
+    .header-right {
+        width: 100%;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+    
+    .device-info {
+        width: 100%;
+        justify-content: space-between;
+    }
+    
+    .grid-col {
+        flex: 1 1 100% !important;
+        min-width: 100%;
+    }
+    
+    .test-digits .digit-number {
+        width: 55px;
+        height: 80px;
+        font-size: 2.2rem;
+    }
+    
+    .digit-controls {
+        width: 55px;
+    }
+    
+    .digit-sim {
+        width: 55px;
+        height: 85px;
+        font-size: 2.2rem;
+    }
+    
+    .unit-cards {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+    
+    .unit-card {
+        flex: 1 1 calc(50% - 10px);
+    }
+}
+
+@media (max-width: 480px) {
+    .test-digits .digit-number {
+        width: 45px;
+        height: 65px;
+        font-size: 1.8rem;
+    }
+    
+    .digit-controls {
+        width: 45px;
+    }
+    
+    .digit-sim {
+        width: 45px;
+        height: 70px;
+        font-size: 1.8rem;
+    }
+    
+    .end-date-value {
+        font-size: 1.2rem;
+    }
+    
+    .remaining-value {
+        font-size: 1.4rem;
+    }
+    
+    .unit-card {
+        flex: 1 1 100%;
+    }
 }

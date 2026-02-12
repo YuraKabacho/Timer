@@ -3,14 +3,22 @@ class SplitFlopController {
     this.config = {
       startDate: "2026-01-01",
       startTime: "12:00:00",
-      durationDays: 0,
+      durationValue: 0,
+      durationUnit: "days",
       syncHour: 3,
       autoSync: true,
-      timerStopped: false,
+      timerStopped: true,
+      useCurrentOnStart: false,
     };
 
-    this.testDigits = [0, 0, 0, 0]; // чотири цифри тривалості
-    this.hourDigits = [0, 0]; // [десятки годин, одиниці годин]
+    this.testDigits = [0, 0, 0, 0];
+    this.hourDigits = [0, 0];
+    this.physicalUpdateTimers = [null, null, null, null];
+
+    this.currentTime = null;
+    this.endDateString = "Обчислюється...";
+    this.startMomentStatic = null;
+    this.timeoutWarningShown = false;
 
     this.init();
   }
@@ -19,15 +27,23 @@ class SplitFlopController {
     this.initEventListeners();
     this.initTestDigits();
     this.initHourDigits();
+    this.initUnitSelector();
+    this.initAutoSyncToggle();
     this.startStatusUpdates();
     await this.loadConfig();
     this.calculateEndDate();
+    this.updateStartMomentDisplay();
+    this.updateStartStopButton();
 
     document.getElementById("last-update").textContent =
       new Date().toLocaleDateString("uk-UA");
+
+    setInterval(() => {
+      console.log("Auto‑save (5 min)");
+      this.saveConfig();
+    }, 300000);
   }
 
-  // ---- Завантаження конфігурації з сервера ----
   async loadConfig() {
     try {
       const response = await fetch("/api/config");
@@ -42,34 +58,154 @@ class SplitFlopController {
         this.config.startTime = data.startTime;
         document.getElementById("start-time").value = data.startTime;
       }
-      if (data.durationDays !== undefined) {
-        this.config.durationDays = data.durationDays;
-        const str = data.durationDays.toString().padStart(4, "0");
+
+      if (data.durationValue !== undefined) {
+        this.config.durationValue = data.durationValue;
+        const str = data.durationValue.toString().padStart(4, "0");
         for (let i = 0; i < 4; i++) {
-          this.testDigits[i] = parseInt(str[i]);
+          this.testDigits[i] = parseInt(str[i]) || 0;
           const digitEl = document.querySelector(
-            `.test-digit[data-segment="${i}"] .digit-number`,
+            `.test-digit[data-segment="${i}"] .digit-number`
           );
-          if (digitEl) digitEl.textContent = str[i];
+          if (digitEl) digitEl.textContent = this.testDigits[i];
         }
       }
+
+      if (data.durationUnit) {
+        this.config.durationUnit = data.durationUnit;
+        this.setActiveUnit(data.durationUnit);
+      }
+
       if (data.syncHour !== undefined) {
         this.config.syncHour = data.syncHour;
         this.hourDigits = [Math.floor(data.syncHour / 10), data.syncHour % 10];
         this.updateHourDisplay();
       }
+
       if (data.autoSync !== undefined) {
         this.config.autoSync = data.autoSync;
-        document.getElementById("auto-sync").checked = data.autoSync;
+        this.updateAutoSyncButton();
+      }
+
+      if (data.useCurrentOnStart !== undefined) {
+        this.config.useCurrentOnStart = data.useCurrentOnStart;
+        const checkbox = document.getElementById("use-current-on-start");
+        checkbox.checked = data.useCurrentOnStart;
+        this.toggleStartFields(data.useCurrentOnStart);
+      }
+
+      if (data.timerStopped !== undefined) {
+        this.config.timerStopped = data.timerStopped;
+        this.updateStartStopButton();
+      }
+
+      if (data.startTimestamp) {
+        this.startMomentStatic = new Date(data.startTimestamp * 1000);
       }
 
       this.calculateEndDate();
+      this.updateStartMomentDisplay();
     } catch (error) {
       console.error("Помилка завантаження конфігурації:", error);
     }
   }
 
-  // ---- Ініціалізація тестових цифр (тривалість) ----
+  async saveConfig() {
+    const durationStr = this.testDigits.join("");
+    const durationValue = parseInt(durationStr, 10) || 0;
+    this.config.durationValue = durationValue;
+
+    const payload = {
+      durationValue: durationValue,
+      durationUnit: this.config.durationUnit,
+      syncHour: this.config.syncHour,
+      autoSync: this.config.autoSync,
+      useCurrentOnStart: this.config.useCurrentOnStart,
+    };
+
+    if (!this.config.useCurrentOnStart) {
+      payload.startDate = document.getElementById("start-date").value;
+      payload.startTime = document.getElementById("start-time").value;
+    }
+
+    try {
+      const response = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        this.showToast("Налаштування збережено успішно", "success");
+        await this.loadConfig();
+      } else {
+        const error = await response
+          .json()
+          .catch(() => ({ error: "Unknown error" }));
+        throw new Error(error.error || "Помилка збереження");
+      }
+    } catch (error) {
+      console.error("Save error:", error);
+      this.showToast(error.message || "Помилка збереження налаштувань", "error");
+    }
+  }
+
+  toggleStartFields(useCurrent) {
+    const fields = document.getElementById("start-datetime-fields");
+    const momentBlock = document.getElementById("current-start-moment");
+    if (useCurrent) {
+      fields.style.display = "none";
+      momentBlock.style.display = "block";
+    } else {
+      fields.style.display = "block";
+      momentBlock.style.display = "none";
+    }
+  }
+
+  updateStartMomentDisplay() {
+    const displayEl = document.getElementById("start-moment-display");
+    if (!displayEl) return;
+
+    if (!this.config.timerStopped && this.startMomentStatic) {
+      displayEl.textContent = this.formatDateTime(this.startMomentStatic);
+      return;
+    }
+
+    if (this.config.useCurrentOnStart) {
+      if (this.currentTime) {
+        displayEl.textContent = this.formatDateTime(this.currentTime);
+      } else {
+        displayEl.textContent = "--:--:--";
+      }
+    } else {
+      displayEl.textContent = `${this.config.startDate} ${this.config.startTime}`;
+    }
+  }
+
+  formatDateTime(date) {
+    if (!date) return "--:--:--";
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    const seconds = String(date.getSeconds()).padStart(2, "0");
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+
+  setPhysicalDigit(segment, value) {
+    if (this.physicalUpdateTimers[segment]) {
+      clearTimeout(this.physicalUpdateTimers[segment]);
+    }
+    this.physicalUpdateTimers[segment] = setTimeout(() => {
+      fetch("/api/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `segment=${segment}&value=${value}`,
+      }).catch((err) => console.error("Physical update failed:", err));
+    }, 200);
+  }
+
   initTestDigits() {
     const testDigits = document.querySelectorAll(".test-digit");
 
@@ -82,14 +218,19 @@ class SplitFlopController {
         let newValue = parseInt(
           prompt(
             `Введіть цифру для сегмента ${index + 1} (0-9):`,
-            this.testDigits[index],
+            this.testDigits[index]
           ),
+          10
         );
-        if (newValue >= 0 && newValue <= 9) {
+        if (!isNaN(newValue) && newValue >= 0 && newValue <= 9) {
           this.testDigits[index] = newValue;
           digitNumber.textContent = newValue;
           this.animateFlip(digitNumber);
           this.calculateEndDate();
+
+          if (this.config.timerStopped) {
+            this.setPhysicalDigit(index, newValue);
+          }
         }
       });
 
@@ -98,6 +239,10 @@ class SplitFlopController {
         digitNumber.textContent = this.testDigits[index];
         this.animateFlip(digitNumber);
         this.calculateEndDate();
+
+        if (this.config.timerStopped) {
+          this.setPhysicalDigit(index, this.testDigits[index]);
+        }
       });
 
       downBtn.addEventListener("click", () => {
@@ -105,18 +250,27 @@ class SplitFlopController {
         digitNumber.textContent = this.testDigits[index];
         this.animateFlip(digitNumber);
         this.calculateEndDate();
+
+        if (this.config.timerStopped) {
+          this.setPhysicalDigit(index, this.testDigits[index]);
+        }
       });
     });
   }
 
-  // ---- Ініціалізація селектора годин (NTP) ----
   initHourDigits() {
+    // Прив'язка до нових елементів у панелі керування
     const tenUp = document.getElementById("hour-ten-up");
     const tenDown = document.getElementById("hour-ten-down");
     const tenDigit = document.getElementById("hour-ten-digit");
     const oneUp = document.getElementById("hour-one-up");
     const oneDown = document.getElementById("hour-one-down");
     const oneDigit = document.getElementById("hour-one-digit");
+
+    if (!tenUp || !tenDown || !tenDigit || !oneUp || !oneDown || !oneDigit) {
+      console.warn("Hour digit elements not found");
+      return;
+    }
 
     this.hourDigits = [0, 0];
     this.updateHourDisplay();
@@ -128,6 +282,7 @@ class SplitFlopController {
       }
       this.updateHourDisplay();
       this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
+      this.saveConfig(); // автосохранение при зміні
     });
 
     tenDown.addEventListener("click", () => {
@@ -137,6 +292,7 @@ class SplitFlopController {
       }
       this.updateHourDisplay();
       this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
+      this.saveConfig();
     });
 
     oneUp.addEventListener("click", () => {
@@ -147,6 +303,7 @@ class SplitFlopController {
       }
       this.updateHourDisplay();
       this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
+      this.saveConfig();
     });
 
     oneDown.addEventListener("click", () => {
@@ -157,6 +314,7 @@ class SplitFlopController {
       }
       this.updateHourDisplay();
       this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
+      this.saveConfig();
     });
 
     tenDigit.addEventListener("click", () => this.promptHourDigit(0));
@@ -168,46 +326,126 @@ class SplitFlopController {
     let newVal = parseInt(
       prompt(
         `Введіть цифру для ${position === 0 ? "десятків" : "одиниць"} години (0-${max}):`,
-        this.hourDigits[position],
+        this.hourDigits[position]
       ),
+      10
     );
     if (!isNaN(newVal) && newVal >= 0 && newVal <= max) {
       this.hourDigits[position] = newVal;
       this.updateHourDisplay();
       this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
+      this.saveConfig();
     }
   }
 
   updateHourDisplay() {
-    document.getElementById("hour-ten-digit").textContent = this.hourDigits[0];
-    document.getElementById("hour-one-digit").textContent = this.hourDigits[1];
+    const tenDigit = document.getElementById("hour-ten-digit");
+    const oneDigit = document.getElementById("hour-one-digit");
+    if (tenDigit) tenDigit.textContent = this.hourDigits[0];
+    if (oneDigit) oneDigit.textContent = this.hourDigits[1];
   }
 
-  // ---- Анімація перекидання ----
+  initAutoSyncToggle() {
+    const btn = document.getElementById("btn-auto-sync");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      this.config.autoSync = !this.config.autoSync;
+      this.updateAutoSyncButton();
+      this.saveConfig();
+    });
+  }
+
+  updateAutoSyncButton() {
+    const btn = document.getElementById("btn-auto-sync");
+    if (!btn) return;
+    if (this.config.autoSync) {
+      btn.innerHTML = '<i class="fas fa-sync-alt"></i> Автосинхронізація: Вкл';
+      btn.classList.add("active");
+    } else {
+      btn.innerHTML = '<i class="fas fa-sync-alt"></i> Автосинхронізація: Викл';
+      btn.classList.remove("active");
+    }
+  }
+
+  initUnitSelector() {
+    const cards = document.querySelectorAll(".unit-card");
+    cards.forEach((card) => {
+      card.addEventListener("click", async () => {
+        const unit = card.dataset.unit;
+        this.config.durationUnit = unit;
+        this.setActiveUnit(unit);
+        this.calculateEndDate();
+
+        if (!this.config.timerStopped) {
+          await this.toggleTimer(); // зупиняємо таймер при зміні одиниць
+        }
+        this.saveConfig();
+      });
+    });
+  }
+
+  setActiveUnit(unit) {
+    const cards = document.querySelectorAll(".unit-card");
+    cards.forEach((card) => {
+      if (card.dataset.unit === unit) {
+        card.classList.add("active");
+      } else {
+        card.classList.remove("active");
+      }
+    });
+  }
+
   animateFlip(element) {
     element.style.animation = "flip 0.5s ease";
     setTimeout(() => (element.style.animation = ""), 500);
   }
 
-  // ---- Обчислення дати завершення ----
   calculateEndDate() {
-    const startDate = document.getElementById("start-date").value;
-    const startTime = document.getElementById("start-time").value;
-    const startDateTime = new Date(`${startDate}T${startTime}`);
+    let startDateTime;
+
+    if (this.config.useCurrentOnStart && this.config.timerStopped) {
+      startDateTime = this.currentTime ? new Date(this.currentTime) : new Date();
+    } else if (
+      this.config.useCurrentOnStart &&
+      !this.config.timerStopped &&
+      this.startMomentStatic
+    ) {
+      startDateTime = new Date(this.startMomentStatic);
+    } else {
+      const startDate = document.getElementById("start-date").value;
+      const startTime = document.getElementById("start-time").value;
+      startDateTime = new Date(`${startDate}T${startTime}`);
+    }
 
     if (isNaN(startDateTime.getTime())) {
-      document.getElementById("end-date-display").textContent = "Невірна дата";
+      this.endDateString = "Невірна дата";
+      document.getElementById("end-date-display").textContent = this.endDateString;
       return;
     }
 
     const durationStr = this.testDigits.join("");
-    const durationDays = parseInt(durationStr, 10) || 0;
-    this.config.durationDays = durationDays;
+    const durationValue = parseInt(durationStr, 10) || 0;
+    this.config.durationValue = durationValue;
 
     let endDateTime = new Date(startDateTime);
-    endDateTime.setDate(endDateTime.getDate() + durationDays);
+    const unit = this.config.durationUnit;
 
-    const formattedDate = endDateTime.toLocaleDateString("uk-UA", {
+    switch (unit) {
+      case "days":
+        endDateTime.setDate(endDateTime.getDate() + durationValue);
+        break;
+      case "hours":
+        endDateTime.setHours(endDateTime.getHours() + durationValue);
+        break;
+      case "minutes":
+        endDateTime.setMinutes(endDateTime.getMinutes() + durationValue);
+        break;
+      case "seconds":
+        endDateTime.setSeconds(endDateTime.getSeconds() + durationValue);
+        break;
+    }
+
+    this.endDateString = endDateTime.toLocaleDateString("uk-UA", {
       year: "numeric",
       month: "long",
       day: "numeric",
@@ -216,17 +454,60 @@ class SplitFlopController {
       second: "2-digit",
     });
 
-    document.getElementById("end-date-display").textContent = formattedDate;
+    document.getElementById("end-date-display").textContent = this.endDateString;
   }
 
-  // ---- Ініціалізація подій ----
+  // ========== ВИПРАВЛЕНО: ДЕТАЛЬНЕ ФОРМАТУВАННЯ ДЛЯ ВЕЛИКИХ ЗНАЧЕНЬ ==========
+  formatDetailedRemaining(seconds) {
+    if (seconds <= 0) return "0 секунд";
+
+    // Константи (рік = 365 днів, місяць = 30 днів)
+    const SECONDS_IN_MINUTE = 60;
+    const SECONDS_IN_HOUR = 3600;
+    const SECONDS_IN_DAY = 86400;
+    const SECONDS_IN_MONTH = 2592000; // 30 днів
+    const SECONDS_IN_YEAR = 31536000;  // 365 днів
+
+    let remaining = seconds;
+    let years = Math.floor(remaining / SECONDS_IN_YEAR);
+    remaining %= SECONDS_IN_YEAR;
+    let months = Math.floor(remaining / SECONDS_IN_MONTH);
+    remaining %= SECONDS_IN_MONTH;
+    let days = Math.floor(remaining / SECONDS_IN_DAY);
+    remaining %= SECONDS_IN_DAY;
+    let hours = Math.floor(remaining / SECONDS_IN_HOUR);
+    remaining %= SECONDS_IN_HOUR;
+    let minutes = Math.floor(remaining / SECONDS_IN_MINUTE);
+    let secs = remaining % SECONDS_IN_MINUTE;
+
+    const parts = [];
+    if (years > 0) parts.push(`${years} р.`);
+    if (months > 0) parts.push(`${months} міс.`);
+    if (days > 0) parts.push(`${days} дн.`);
+    if (hours > 0) parts.push(`${hours} год.`);
+    if (minutes > 0) parts.push(`${minutes} хв.`);
+    if (secs > 0 || parts.length === 0) parts.push(`${secs} сек.`);
+
+    return parts.join(" ");
+  }
+
   initEventListeners() {
+    document.getElementById("start-date").addEventListener("change", () => {
+      if (!this.config.useCurrentOnStart) this.calculateEndDate();
+    });
+    document.getElementById("start-time").addEventListener("change", () => {
+      if (!this.config.useCurrentOnStart) this.calculateEndDate();
+    });
+
     document
-      .getElementById("start-date")
-      .addEventListener("change", () => this.calculateEndDate());
-    document
-      .getElementById("start-time")
-      .addEventListener("change", () => this.calculateEndDate());
+      .getElementById("use-current-on-start")
+      .addEventListener("change", (e) => {
+        this.config.useCurrentOnStart = e.target.checked;
+        this.toggleStartFields(e.target.checked);
+        this.calculateEndDate();
+        this.updateStartMomentDisplay();
+        this.saveConfig();
+      });
 
     document
       .getElementById("btn-save")
@@ -238,136 +519,76 @@ class SplitFlopController {
       .getElementById("btn-calibrate")
       .addEventListener("click", () => this.calibrateMotors());
     document
-      .getElementById("btn-stop")
-      .addEventListener("click", () => this.stopTimer());
-    document
-      .getElementById("btn-apply-test")
-      .addEventListener("click", () => this.applyTestDigits());
-
-    document.getElementById("auto-sync").addEventListener("change", (e) => {
-      this.config.autoSync = e.target.checked;
-    });
+      .getElementById("btn-start-stop")
+      .addEventListener("click", () => this.toggleTimer());
   }
 
-  // ---- Збереження конфігурації ----
-  async saveConfig() {
-    const durationStr = this.testDigits.join("");
-    const durationDays = parseInt(durationStr, 10) || 0;
-
-    const payload = {
-      startDate: document.getElementById("start-date").value,
-      startTime: document.getElementById("start-time").value,
-      durationDays: durationDays,
-      syncHour: this.config.syncHour,
-      autoSync: this.config.autoSync,
-    };
-
-    try {
-      const response = await fetch("/api/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.ok) {
-        this.showToast("Налаштування збережено успішно", "success");
-        this.config.durationDays = durationDays;
-      } else {
-        const error = await response.json();
-        throw new Error(error.error || "Помилка збереження");
-      }
-    } catch (error) {
-      this.showToast(
-        error.message || "Помилка збереження налаштувань",
-        "error",
-      );
-      console.error(error);
+  updateStartStopButton() {
+    const btn = document.getElementById("btn-start-stop");
+    if (!btn) return;
+    if (this.config.timerStopped) {
+      btn.innerHTML = '<i class="fas fa-play"></i> Старт';
+      btn.classList.remove("btn-danger");
+      btn.classList.add("btn-success");
+    } else {
+      btn.innerHTML = '<i class="fas fa-pause"></i> Стоп';
+      btn.classList.remove("btn-success");
+      btn.classList.add("btn-danger");
     }
   }
 
-  // ---- Тестування цифр (фізичне встановлення) ----
-  async applyTestDigits() {
-    try {
-      for (let i = 0; i < 4; i++) {
-        const response = await fetch("/api/test", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `segment=${i}&value=${this.testDigits[i]}`,
-        });
-        if (!response.ok) throw new Error("Помилка встановлення цифр");
-      }
-
-      const digitSims = document.querySelectorAll(".digit-sim");
-      digitSims.forEach((sim, i) => {
-        sim.textContent = this.testDigits[i];
-        this.animateFlip(sim);
-      });
-
-      this.showToast(
-        `Встановлено цифри: ${this.testDigits.join("")}`,
-        "success",
-      );
-    } catch (error) {
-      this.showToast("Помилка встановлення цифр", "error");
-    }
-  }
-
-  // ---- Синхронізація часу ----
-  async syncTime() {
-    try {
-      const response = await fetch("/api/sync", { method: "POST" });
-      if (response.ok) {
-        this.showToast("Синхронізацію часу запущено", "success");
-        setTimeout(() => this.updateStatus(), 2000);
-      }
-    } catch (error) {
-      this.showToast("Помилка синхронізації", "error");
-    }
-  }
-
-  // ---- Калібрування двигунів ----
-  async calibrateMotors() {
-    try {
-      const response = await fetch("/api/calibrate", { method: "POST" });
-      if (response.ok) {
-        this.showToast("Калібрування двигунів запущено", "warning");
-        // Через деякий час оновимо статус – після калібрування сегменти будуть у нулі
-        setTimeout(() => this.updateStatus(), 5000);
-      }
-    } catch (error) {
-      this.showToast("Помилка калібрування", "error");
-    }
-  }
-
-  // ---- Зупинка / запуск таймера ----
-  async stopTimer() {
+  async toggleTimer() {
     try {
       const response = await fetch("/api/stop", { method: "POST" });
       if (response.ok) {
         const data = await response.json();
         this.config.timerStopped = data.status === "stopped";
-        document.getElementById("timer-status").textContent = this.config
-          .timerStopped
-          ? "Зупинений"
-          : "Активний";
-        document.getElementById("timer-status").style.color = this.config
-          .timerStopped
-          ? "#f59e0b"
-          : "#10b981";
+
+        if (!this.config.timerStopped) {
+          if (this.currentTime) {
+            this.startMomentStatic = new Date(this.currentTime);
+          } else {
+            this.startMomentStatic = new Date();
+          }
+          this.calculateEndDate();
+        }
+
+        this.updateStartStopButton();
         this.showToast(
           this.config.timerStopped ? "Таймер зупинено" : "Таймер запущено",
-          this.config.timerStopped ? "warning" : "success",
+          this.config.timerStopped ? "warning" : "success"
         );
+        this.updateStartMomentDisplay();
+        setTimeout(() => this.updateStatus(), 500);
       }
     } catch (error) {
-      this.showToast("Помилка зупинки таймера", "error");
+      this.showToast("Помилка перемикання таймера", "error");
     }
   }
 
-  // ---- Оновлення статусу з сервера (періодичне) ----
+  async syncTime() {
+    try {
+      await fetch("/api/sync", { method: "POST" });
+      this.showToast("Синхронізацію часу запущено", "success");
+      setTimeout(() => this.updateStatus(), 2000);
+    } catch (error) {
+      this.showToast("Помилка синхронізації", "error");
+    }
+  }
+
+  async calibrateMotors() {
+    try {
+      await fetch("/api/calibrate", { method: "POST" });
+      this.showToast("Калібрування двигунів запущено", "warning");
+      setTimeout(() => this.updateStatus(), 5000);
+    } catch (error) {
+      this.showToast("Помилка калібрування", "error");
+    }
+  }
+
   async startStatusUpdates() {
     await this.updateStatus();
-    setInterval(() => this.updateStatus(), 3000);
+    setInterval(() => this.updateStatus(), 1000);
   }
 
   async updateStatus() {
@@ -376,19 +597,39 @@ class SplitFlopController {
       if (!response.ok) throw new Error("Network error");
       const data = await response.json();
 
-      if (data.currentTimeFormatted)
+      if (data.currentTimeFormatted) {
         document.getElementById("current-time").textContent =
           data.currentTimeFormatted;
-      if (data.timeRemaining)
-        document.getElementById("time-remaining").textContent =
-          data.timeRemaining;
+        const [hours, minutes, seconds] = data.currentTimeFormatted
+          .split(":")
+          .map(Number);
+        const now = new Date();
+        now.setHours(hours, minutes, seconds, 0);
+        this.currentTime = now;
+
+        if (this.config.useCurrentOnStart && this.config.timerStopped) {
+          this.calculateEndDate();
+        }
+      }
+
+      if (data.timeRemaining) {
+        document.getElementById("time-remaining").textContent = data.timeRemaining;
+      }
+
+      if (data.remainingSeconds !== undefined) {
+        const detailed = this.formatDetailedRemaining(data.remainingSeconds);
+        document.getElementById("time-remaining-detailed").textContent = detailed;
+      }
+
+      if (data.timeRemaining === "Час вийшов" && !this.timeoutWarningShown) {
+        this.timeoutWarningShown = true;
+        this.showTimeoutWarning();
+      } else if (data.timeRemaining !== "Час вийшов") {
+        this.timeoutWarningShown = false;
+      }
 
       if (data.motorsHomed !== undefined) {
-        const status = data.motorsHomed ? "Калібровані" : "Не калібровані";
-        document.getElementById("motor-status").textContent = status;
-        document.getElementById("motor-status").style.color = data.motorsHomed
-          ? "#10b981"
-          : "#f59e0b";
+        this.updateCalibrationBadge(data.motorsHomed, data.calibrationInProgress);
       }
 
       if (data.segmentValues) {
@@ -406,30 +647,20 @@ class SplitFlopController {
 
       if (data.timerStopped !== undefined) {
         this.config.timerStopped = data.timerStopped;
-        document.getElementById("timer-status").textContent = data.timerStopped
-          ? "Зупинений"
-          : "Активний";
-        document.getElementById("timer-status").style.color = data.timerStopped
-          ? "#f59e0b"
-          : "#10b981";
+        this.updateStartStopButton();
       }
 
-      if (data.endDateDisplay) {
-        document.getElementById("end-date-display").textContent =
-          data.endDateDisplay;
-      }
-
-      // Якщо таймер зупинено – показуємо в тестових цифрах збережену тривалість
-      if (data.timerStopped && data.durationDays !== undefined) {
-        const str = data.durationDays.toString().padStart(4, "0");
-        for (let i = 0; i < 4; i++) {
-          this.testDigits[i] = parseInt(str[i]);
-          const testDigit = document.querySelector(
-            `.test-digit[data-segment="${i}"] .digit-number`,
-          );
-          if (testDigit) testDigit.textContent = str[i];
+      if (data.startTimestamp && !this.config.timerStopped) {
+        const serverStart = new Date(data.startTimestamp * 1000);
+        if (
+          !this.startMomentStatic ||
+          this.startMomentStatic.getTime() !== serverStart.getTime()
+        ) {
+          this.startMomentStatic = serverStart;
         }
       }
+
+      this.updateStartMomentDisplay();
 
       const statusElement = document.getElementById("connection-status");
       if (navigator.onLine) {
@@ -444,7 +675,37 @@ class SplitFlopController {
     }
   }
 
-  showToast(message, type = "success") {
+  updateCalibrationBadge(homed, inProgress) {
+    const badge = document.getElementById("calibration-badge");
+    const textSpan = document.getElementById("calibration-status-text");
+    if (!badge || !textSpan) return;
+
+    badge.classList.remove("calibrated", "not-calibrated", "in-progress");
+
+    if (inProgress) {
+      badge.classList.add("in-progress");
+      textSpan.textContent = "Калібр: триває...";
+      badge.querySelector("i").className = "fas fa-cogs fa-spin";
+    } else if (homed) {
+      badge.classList.add("calibrated");
+      textSpan.textContent = "Калібр: OK";
+      badge.querySelector("i").className = "fas fa-check-circle";
+    } else {
+      badge.classList.add("not-calibrated");
+      textSpan.textContent = "Калібр: Ні";
+      badge.querySelector("i").className = "fas fa-exclamation-triangle";
+    }
+  }
+
+  showTimeoutWarning() {
+    const message =
+      "⏰ Час відліку вичерпано!\n\nВи можете:\n" +
+      "• Увімкнути 'Запустити відлік від поточного моменту' та натиснути 'Старт';\n" +
+      "• Або змінити дату/час старту або тривалість.";
+    this.showToast(message, "warning", 10000);
+  }
+
+  showToast(message, type = "success", duration = 5000) {
     const container = document.getElementById("toast-container");
     const toast = document.createElement("div");
     toast.className = `toast ${type}`;
@@ -456,7 +717,7 @@ class SplitFlopController {
     setTimeout(() => {
       toast.style.animation = "slideIn 0.3s ease reverse";
       setTimeout(() => container.removeChild(toast), 300);
-    }, 5000);
+    }, duration);
   }
 }
 

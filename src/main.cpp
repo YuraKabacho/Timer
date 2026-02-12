@@ -14,40 +14,44 @@
 #include <WiFiUdp.h>
 
 #include "ConfigManager.h"
+#include "SegmentController.h"  // додано
 
 ConfigManager configManager;
 
-// Оголошення зовнішніх функцій (визначені в інших .cpp файлах)
+// Зовнішні функції
 void setupLittleFS();
 void setupWiFi();
 void setupMDNS();
 void setupWebServer();
-void setupSegmentController();
+void setupSegmentController();   // тепер з .h
 void setupTimerController();
 
-// Зовнішні змінні (визначені в TimerController.cpp)
+// Зовнішні змінні
 extern bool timerStopped;
 extern AsyncWebServer server;
 extern WiFiManager wm;
+
+// Функції оновлення
+extern void updateTimer();          // з SegmentController.cpp
+extern void updateTimerController(); // з TimerController.cpp
 
 void setup() {
     Serial.begin(115200);
     delay(500);
 
-    // Ініціалізація I2C (SDA=8, SCL=9 для ESP32-S3-Zero)
     Wire.begin(8, 9);
     Wire.setClock(400000);
 
-    setupLittleFS();          // 1. Файлова система (LittleFS)
-    setupWiFi();             // 2. Підключення до WiFi / точка доступу
+    setupLittleFS();
+    setupWiFi();
 
-    configManager.begin();   // 3. Ініціалізація Preferences
-    configManager.load();    // 4. Завантаження збережених налаштувань
+    configManager.begin();
+    configManager.load();
 
-    setupMDNS();             // 5. mDNS (timer.local)
-    setupSegmentController(); // 6. Контролер двигунів та PCF8575
-    setupTimerController();   // 7. Контролер часу (NTP)
-    setupWebServer();        // 8. Веб‑сервер (API + статика)
+    setupMDNS();
+    setupSegmentController();
+    setupTimerController();
+    setupWebServer();
 
     Serial.println("Setup complete!");
     Serial.print("Open: http://");
@@ -56,6 +60,7 @@ void setup() {
 }
 
 void loop() {
-    // Головний цикл – все працює асинхронно (таймери, сервер)
+    updateTimer();
+    updateTimerController();
     delay(10);
 }

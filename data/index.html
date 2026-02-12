@@ -6,93 +6,124 @@
     <title>Split Flop Timer - Відлік днів</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;500&subset=cyrillic,cyrillic-ext&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
+        <!-- ========== HEADER зі статусом калібровки ========== -->
         <header class="header">
             <div class="logo">
                 <i class="fas fa-clock"></i>
                 <h1>Split Flop Timer - Відлік днів</h1>
             </div>
-            <div class="device-info">
-                <span class="ip-address"><i class="fas fa-wifi"></i> <span id="ip-address">timer.local</span></span>
-                <span class="status" id="connection-status"><i class="fas fa-circle"></i> Підключено</span>
+            <div class="header-right">
+                <div class="calibration-badge" id="calibration-badge">
+                    <i class="fas fa-cogs"></i>
+                    <span id="calibration-status-text">Калібр: ?</span>
+                </div>
+                <div class="device-info">
+                    <span class="ip-address"><i class="fas fa-wifi"></i> <span id="ip-address">timer.local</span></span>
+                    <span class="status" id="connection-status"><i class="fas fa-circle"></i> Підключено</span>
+                </div>
             </div>
         </header>
 
-        <div class="system-status">
-            <div class="status-grid">
-                <div class="status-item">
-                    <span class="status-label">Поточний час ESP32:</span>
-                    <span class="status-value" id="current-time">--:--:--</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">Залишилось днів:</span>
-                    <span class="status-value" id="time-remaining">0 днів</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">Статус двигунів:</span>
-                    <span class="status-value" id="motor-status">Не калібровані</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">Статус таймера:</span>
-                    <span class="status-value" id="timer-status">Активний</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- ========== ОСНОВНИЙ КОНТЕНТ – СІТКА ========== -->
-        <main class="main-content">
-            <!-- Ліва колонка (десктоп) – 2fr, містить setup + bothrow -->
-            <div class="grid-area-setup">
-                <div class="panel-section">
-                    <h2><i class="fas fa-calendar-plus"></i> Встановлення відліку</h2>
-                    <div class="time-setup">
-                        <div class="time-group">
-                            <h3><i class="fas fa-play-circle"></i> Початкова точка</h3>
-                            <div class="datetime-inputs">
-                                <div class="input-group calendar-group">
-                                    <label><i class="fas fa-calendar-alt"></i> Дата початку:</label>
-                                    <div class="calendar-wrapper">
-                                        <input type="date" id="start-date" value="2026-01-01" class="calendar-input">
+        <!-- ========== ОСНОВНА СІТКА (2 ряди) ========== -->
+        <main class="main-grid">
+            <!-- РЯД 1: Встановлення відліку / Дата завершення / Керування -->
+            <div class="grid-row row-top">
+                <div class="grid-col setup-col" style="flex: 2;">
+                    <div class="panel-section setup-panel">
+                        <h2><i class="fas fa-calendar-plus"></i> Встановлення відліку</h2>
+                        <div class="current-time-compact">
+                            <i class="fas fa-clock"></i>
+                            <span>Поточний час:</span>
+                            <span id="current-time" class="current-time-value">--:--:--</span>
+                        </div>
+                        <div class="time-setup">
+                            <div class="time-group">
+                                <h3><i class="fas fa-play-circle"></i> Початкова точка</h3>
+                                <label for="use-current-on-start" class="checkbox-label">
+                                    <input type="checkbox" id="use-current-on-start">
+                                    <span class="checkmark"></span>
+                                    <span>Запустити відлік від поточного моменту при старті</span>
+                                    <span class="info-hint">(при натисканні кнопки запуску)</span>
+                                </label>
+                                <div id="start-datetime-fields">
+                                    <div class="datetime-inputs">
+                                        <div class="input-group calendar-group">
+                                            <label for="start-date"><i class="fas fa-calendar-alt"></i> Дата початку:</label>
+                                            <div class="calendar-wrapper">
+                                                <input type="date" id="start-date" value="2026-01-01" class="calendar-input">
+                                            </div>
+                                        </div>
+                                        <div class="input-group time-group">
+                                            <label for="start-time"><i class="fas fa-clock"></i> Час початку:</label>
+                                            <div class="time-wrapper">
+                                                <input type="time" id="start-time" value="12:00:00" step="1" class="time-input">
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
-                                <div class="input-group time-group">
-                                    <label><i class="fas fa-clock"></i> Час початку:</label>
-                                    <div class="time-wrapper">
-                                        <input type="time" id="start-time" value="12:00:00" step="1" class="time-input">
+                                <div id="current-start-moment" style="display: none;">
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <i class="fas fa-play-circle" style="color: var(--primary-color); font-size: 1.5rem;"></i>
+                                        <div>
+                                            <div style="font-size: 0.9rem; color: var(--text-secondary);">Відлік почато від:</div>
+                                            <div id="start-moment-display" style="font-family: 'Orbitron', sans-serif; font-size: 1.2rem; color: var(--primary-color);">--:--:--</div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <!-- Права колонка (десктоп) – 1fr, містить enddate + imit -->
-            <div class="grid-area-enddate">
-                <div class="panel-section">
-                    <h2><i class="fas fa-calendar-check"></i> Дата завершення</h2>
-                    <div class="end-date-display">
-                        <div class="date-display-wrapper">
-                            <div class="date-icon">
-                                <i class="fas fa-calendar-check"></i>
+                <div class="grid-col enddate-col" style="flex: 2.5;">
+                    <div class="panel-section enddate-panel">
+                        <h2><i class="fas fa-calendar-check"></i> Дата завершення</h2>
+                        <div class="end-date-content">
+                            <div class="end-date-main">
+                                <div class="end-date-label">Закінчення відліку:</div>
+                                <div class="end-date-value" id="end-date-display">Обчислюється...</div>
                             </div>
-                            <div class="date-content">
-                                <div class="date-label">Закінчення відліку:</div>
-                                <div class="date-value" id="end-date-display">Обчислюється...</div>
+                            <div class="remaining-main">
+                                <div class="remaining-label">Залишилось:</div>
+                                <div class="remaining-value" id="time-remaining">0 дн.</div>
+                            </div>
+                            <div class="remaining-detailed">
+                                <div class="detailed-label">Детально:</div>
+                                <div class="detailed-value" id="time-remaining-detailed">0 сек.</div>
                             </div>
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <!-- Контейнер для двох блоків поруч (Тривалість відліку + Синхронізація) -->
-            <div class="grid-area-bothrow">
-                <div class="two-panels-row">
-                    <!-- Тривалість відліку (колишнє Тестування сегментів) -->
-                    <div class="panel-section">
+                <div class="grid-col action-col" style="flex: 1.5;">
+                    <div class="panel-section action-panel">
+                        <h2><i class="fas fa-cog"></i> Керування</h2>
+                        <div class="action-buttons-stack">
+                            <button id="btn-start-stop" class="btn btn-success">
+                                <i class="fas fa-play"></i> Старт
+                            </button>
+                            <button id="btn-calibrate" class="btn btn-warning">
+                                <i class="fas fa-cogs"></i> Калібрувати
+                            </button>
+                            <button id="btn-sync" class="btn btn-secondary">
+                                <i class="fas fa-sync-alt"></i> Синхронізувати зараз
+                            </button>
+                            <button id="btn-save" class="btn btn-primary">
+                                <i class="fas fa-save"></i> Зберегти налаштування
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div> <!-- row-top -->
+
+            <!-- РЯД 2: Тривалість / Імітація / Тип відліку / Синхронізація -->
+            <div class="grid-row row-bottom">
+                <div class="grid-col duration-col" style="flex: 2;">
+                    <div class="panel-section duration-panel">
                         <h2><i class="fas fa-hourglass-half"></i> Тривалість відліку</h2>
                         <div class="test-display">
                             <div class="test-labels">
@@ -131,23 +162,68 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="test-actions">
-                                <button id="btn-apply-test" class="btn btn-secondary">
-                                    <i class="fas fa-play"></i> Тестування цифр
-                                </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-col simulation-col" style="flex: 2;">
+                    <div class="panel-section simulation-panel">
+                        <h2><i class="fas fa-display"></i> Імітація дисплея</h2>
+                        <div class="display-simulation">
+                            <div class="display-labels">
+                                <span>Тис.</span>
+                                <span>Сот.</span>
+                                <span>Дес.</span>
+                                <span>Од.</span>
+                            </div>
+                            <div class="digit-display" id="digit-display">
+                                <div class="digit-sim" data-segment="0">0</div>
+                                <div class="digit-sim" data-segment="1">0</div>
+                                <div class="digit-sim" data-segment="2">0</div>
+                                <div class="digit-sim" data-segment="3">0</div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <!-- Синхронізація з NTP -->
-                    <div class="panel-section">
+                <div class="grid-col unit-col" style="flex: 1;">
+                    <div class="panel-section unit-selector-panel">
+                        <h2><i class="fas fa-clock"></i> Тип відліку</h2>
+                        <div class="unit-selector">
+                            <div class="unit-cards">
+                                <div class="unit-card" data-unit="days">
+                                    <span class="unit-digit">DD</span>
+                                    <span class="unit-label">Дні</span>
+                                </div>
+                                <div class="unit-card" data-unit="hours">
+                                    <span class="unit-digit">HH</span>
+                                    <span class="unit-label">Години</span>
+                                </div>
+                                <div class="unit-card" data-unit="minutes">
+                                    <span class="unit-digit">MM</span>
+                                    <span class="unit-label">Хвилини</span>
+                                </div>
+                                <div class="unit-card" data-unit="seconds">
+                                    <span class="unit-digit">SS</span>
+                                    <span class="unit-label">Секунди</span>
+                                </div>
+                            </div>
+                            <div class="unit-hint">
+                                <i class="fas fa-arrows-alt-h"></i> оберіть одиницю
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-col sync-col" style="flex: 1;">
+                    <div class="panel-section sync-panel">
                         <h2><i class="fas fa-sync-alt"></i> Синхронізація з NTP</h2>
                         <div class="sync-controls">
-                            <div class="checkbox-label">
+                            <label for="auto-sync" class="checkbox-label">
                                 <input type="checkbox" id="auto-sync" checked>
                                 <span class="checkmark"></span>
-                                Автосинхронізація щодня
-                            </div>
+                                Автосинхронізація
+                            </label>
                             <div class="hour-selector-digits">
                                 <div class="test-labels" style="margin-top: 10px;">
                                     <span>Год.1</span>
@@ -176,55 +252,16 @@
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Імітація дисплея (права колонка) -->
-            <div class="grid-area-imit">
-                <div class="panel-section">
-                    <h2><i class="fas fa-display"></i> Імітація дисплея</h2>
-                    <div class="display-simulation">
-                        <div class="display-labels">
-                            <span>Тис.</span>
-                            <span>Сот.</span>
-                            <span>Дес.</span>
-                            <span>Од.</span>
-                        </div>
-                        <div class="digit-display" id="digit-display">
-                            <div class="digit-sim" data-segment="0">0</div>
-                            <div class="digit-sim" data-segment="1">0</div>
-                            <div class="digit-sim" data-segment="2">0</div>
-                            <div class="digit-sim" data-segment="3">0</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            </div> <!-- row-bottom -->
         </main>
 
-        <div class="actions-bottom">
-            <div class="action-buttons">
-                <button id="btn-save" class="btn btn-primary">
-                    <i class="fas fa-save"></i> Зберегти налаштування
-                </button>
-                <button id="btn-sync" class="btn btn-secondary">
-                    <i class="fas fa-sync-alt"></i> Синхронізувати зараз
-                </button>
-                <button id="btn-calibrate" class="btn btn-warning">
-                    <i class="fas fa-cogs"></i> Калібрувати двигуни
-                </button>
-                <button id="btn-stop" class="btn btn-danger">
-                    <i class="fas fa-pause"></i> Зупинити/Запустити таймер
-                </button>
-            </div>
-        </div>
-
         <footer class="footer">
-            <p>Split Flop Timer Controller v4.5 | ESP32-S3 | 2 PCF8575 | 4 сегменти | Відлік днів</p>
+            <p>Split Flop Timer Controller v6.1 | ESP32-S3 | 2 PCF8575 | 4 сегменти</p>
             <p class="update-info">Останнє оновлення: <span id="last-update">--</span></p>
         </footer>
     </div>
 
     <div id="toast-container"></div>
-
     <script src="script.js"></script>
 </body>
 </html>

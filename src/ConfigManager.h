@@ -5,39 +5,34 @@
 #include <Preferences.h>
 #include <time.h>
 
-/**
- * @struct Duration
- * @brief  Тривалість відліку в днях.
- */
-struct Duration {
-    int days;
+extern bool timerStopped; // з TimerController.cpp
+
+enum DurationUnit {
+    UNIT_DAYS = 0,
+    UNIT_HOURS = 1,
+    UNIT_MINUTES = 2,
+    UNIT_SECONDS = 3
 };
 
-// Зовнішнє оголошення стану таймера (визначено в TimerController.cpp)
-extern bool timerStopped;
+struct Duration {
+    int value;
+    DurationUnit unit;
 
-/**
- * @class ConfigManager
- * @brief  Керування збереженням налаштувань у Flash (Preferences).
- *
- *         Зберігає:
- *         - startTime   (time_t) – дата/час початку відліку
- *         - duration    (int)    – кількість днів відліку
- *         - syncHour24  (int)    – година автоматичної синхронізації NTP
- *         - autoSync    (bool)   – чи ввімкнено автосинхронізацію
- */
+    Duration() : value(0), unit(UNIT_DAYS) {}
+};
+
 class ConfigManager {
 private:
     Preferences preferences;
+    bool nvsInitialized = false;
 
-    // Внутрішня структура конфігурації
     struct TimerConfig {
-        time_t startTime;      // початкова точка (секунди з 01.01.1970)
-        Duration duration;     // тривалість в днях
-        int syncHour24;        // година синхронізації (0..23)
-        bool autoSync;         // прапорець автосинхронізації
+        time_t startTime;
+        Duration duration;
+        int syncHour24;
+        bool autoSync;
+        bool useCurrentOnStart;
 
-        // Конструктор за замовчуванням
         TimerConfig() {
             time_t now = time(nullptr);
             if (now > 0) {
@@ -47,9 +42,8 @@ private:
                 tm->tm_sec = 0;
                 startTime = mktime(tm);
             } else {
-                // Якщо час не встановлено – використовуємо 01.01.2026 12:00
                 struct tm tm = {0};
-                tm.tm_year = 126; // 2026 - 1900
+                tm.tm_year = 126;
                 tm.tm_mon = 0;
                 tm.tm_mday = 1;
                 tm.tm_hour = 12;
@@ -57,35 +51,54 @@ private:
                 tm.tm_sec = 0;
                 startTime = mktime(&tm);
             }
-            duration = {0};
-            syncHour24 = 3;      // 3:00 ночі
+            duration = Duration();
+            syncHour24 = 3;
             autoSync = true;
+            useCurrentOnStart = false;
         }
     };
 
     TimerConfig config;
 
+    long unitToSeconds(DurationUnit u) const {
+        switch (u) {
+            case UNIT_DAYS:    return 86400L;
+            case UNIT_HOURS:   return 3600L;
+            case UNIT_MINUTES: return 60L;
+            case UNIT_SECONDS: return 1L;
+            default:           return 86400L;
+        }
+    }
+
 public:
     ConfigManager() {}
 
-    /**
-     * @brief Відкриває сховище Preferences.
-     * @return true – успішно, false – помилка.
-     */
     bool begin() {
-        return preferences.begin("timer-config", false);
+        nvsInitialized = preferences.begin("timer-config", false);
+        if (!nvsInitialized) {
+            Serial.println("❌ Preferences begin failed");
+        }
+        return nvsInitialized;
     }
 
-    /**
-     * @brief Завантажує конфігурацію з Flash.
-     */
     void load() {
-        config.startTime = preferences.getULong64("startTime", 0);
-        config.duration.days = preferences.getInt("durationDays", 0);
+        if (!nvsInitialized) {
+            Serial.println("⚠️ NVS not open, cannot load");
+            return;
+        }
+
+        // Читаємо startTime як два uint32_t
+        uint32_t startTimeLow = preferences.getUInt("startLow", 0);
+        uint32_t startTimeHigh = preferences.getUInt("startHigh", 0);
+        config.startTime = ((uint64_t)startTimeHigh << 32) | startTimeLow;
+
+        config.duration.value = preferences.getInt("durationValue", 0);
+        config.duration.unit = (DurationUnit)preferences.getUChar("durUnit", UNIT_DAYS);
         config.syncHour24 = preferences.getInt("syncHour", 3);
         config.autoSync = preferences.getBool("autoSync", true);
+        config.useCurrentOnStart = preferences.getBool("useCurStart", false);
 
-        // Якщо час не було збережено – встановлюємо поточний
+        // Якщо startTime ще не збережено (0) – встановлюємо сьогодні 12:00
         if (config.startTime == 0) {
             time_t now = time(nullptr);
             if (now > 0) {
@@ -96,74 +109,126 @@ public:
                 config.startTime = mktime(tm);
             }
         }
+
+        Serial.printf("Loaded startTime: %lld\n", (int64_t)config.startTime);
     }
 
-    /**
-     * @brief Зберігає конфігурацію у Flash.
-     * @return true – успішно, false – помилка.
-     */
     bool save() {
-        bool success = true;
-        success &= preferences.putULong64("startTime", config.startTime);
-        success &= preferences.putInt("durationDays", config.duration.days);
-        success &= preferences.putInt("syncHour", config.syncHour24);
-        success &= preferences.putBool("autoSync", config.autoSync);
+        if (!nvsInitialized) {
+            Serial.println("❌ NVS not open, cannot save");
+            return false;
+        }
 
-        // Завершуємо і відкриваємо знову для коректної роботи
-        preferences.end();
-        preferences.begin("timer-config", false);
-        return success;
+        bool allOk = true;
+        size_t ret;
+
+        // --- Зберігаємо startTime як два 32-бітних числа ---
+        uint64_t st = (uint64_t)config.startTime;
+        uint32_t low = st & 0xFFFFFFFF;
+        uint32_t high = (st >> 32) & 0xFFFFFFFF;
+
+        ret = preferences.putUInt("startLow", low);
+        Serial.printf("SAVE startLow: %s → %u\n", ret ? "OK" : "FAIL", low);
+        allOk &= (ret != 0);
+
+        ret = preferences.putUInt("startHigh", high);
+        Serial.printf("SAVE startHigh: %s → %u\n", ret ? "OK" : "FAIL", high);
+        allOk &= (ret != 0);
+
+        // --- Інші параметри ---
+        ret = preferences.putInt("durationValue", config.duration.value);
+        Serial.printf("SAVE durationValue: %s → %d\n", ret ? "OK" : "FAIL", config.duration.value);
+        allOk &= (ret != 0);
+
+        ret = preferences.putUChar("durUnit", (uint8_t)config.duration.unit);
+        Serial.printf("SAVE durUnit: %s → %d\n", ret ? "OK" : "FAIL", config.duration.unit);
+        allOk &= (ret != 0);
+
+        ret = preferences.putInt("syncHour", config.syncHour24);
+        Serial.printf("SAVE syncHour: %s → %d\n", ret ? "OK" : "FAIL", config.syncHour24);
+        allOk &= (ret != 0);
+
+        ret = preferences.putBool("autoSync", config.autoSync);
+        Serial.printf("SAVE autoSync: %s → %d\n", ret ? "OK" : "FAIL", config.autoSync);
+        allOk &= (ret != 0);
+
+        ret = preferences.putBool("useCurStart", config.useCurrentOnStart);
+        Serial.printf("SAVE useCurStart: %s → %d\n", ret ? "OK" : "FAIL", config.useCurrentOnStart);
+        allOk &= (ret != 0);
+
+        if (allOk) {
+            Serial.println("✅ All preferences saved successfully.");
+        } else {
+            Serial.println("❌ One or more preferences write failed (returned 0)");
+        }
+
+        return allOk;
     }
 
-    /**
-     * @brief Повертає посилання на поточну конфігурацію.
-     */
     TimerConfig& getConfig() { return config; }
 
-    /**
-     * @brief Встановлює нову конфігурацію і зберігає її.
-     */
     void setConfig(const TimerConfig& newConfig) {
         config = newConfig;
         save();
     }
 
-    /**
-     * @brief Обчислює час завершення відліку.
-     * @return time_t (секунди з 01.01.1970).
-     */
-    time_t calculateEndTime() {
-        time_t durationSeconds = config.duration.days * 86400L;
-        return config.startTime + durationSeconds;
+    void saveTimerState(bool isRunning) {
+        if (!nvsInitialized) return;
+        size_t ret = preferences.putBool("timerRunning", isRunning);
+        Serial.printf("SAVE timerState: %s → %s\n", ret ? "OK" : "FAIL", isRunning ? "RUNNING" : "STOPPED");
     }
 
-    /**
-     * @brief Повертає кількість днів, що залишилась до завершення.
-     * @return int (0..9999).
-     */
-    int getCurrentDaysRemaining() {
-        if (timerStopped) {
-            return config.duration.days;
+    bool loadTimerState() {
+        if (!nvsInitialized) return false;
+        return preferences.getBool("timerRunning", false);
+    }
+
+    // --- Обчислення залишку в одиницях (без переповнення) ---
+    int getCurrentValueRemaining() const {
+        time_t now = time(nullptr);
+        if (now == 0) return config.duration.value;
+
+        if (now < config.startTime) {
+            return config.duration.value;
         }
 
-        time_t now = time(nullptr);
-        if (now == 0) return config.duration.days;
-
-        time_t endTime = calculateEndTime();
-        if (endTime <= now) return 0;
-
-        int secondsRemaining = endTime - now;
-        int daysRemaining = secondsRemaining / 86400;
-        return daysRemaining;
+        long diffSeconds = now - config.startTime;
+        long unitSecs = unitToSeconds(config.duration.unit);
+        long elapsedUnits = diffSeconds / unitSecs;
+        long remaining = config.duration.value - elapsedUnits;
+        return (remaining > 0) ? (int)remaining : 0;
     }
 
-    /**
-     * @brief Перевіряє, чи активний таймер (поточний час менший за час завершення).
-     */
-    bool isTimerActive() {
+    // --- Обчислення залишку в секундах (int64_t, без переповнення) ---
+    int64_t getRemainingSeconds() const {
         time_t now = time(nullptr);
-        if (now == 0) return false;
-        return now < calculateEndTime();
+        if (now == 0) return 0;
+        if (now < config.startTime) {
+            return (int64_t)config.duration.value * unitToSeconds(config.duration.unit);
+        }
+
+        int64_t start64 = (int64_t)config.startTime;
+        int64_t now64 = (int64_t)now;
+        int64_t diffSeconds = now64 - start64;
+        int64_t unitSecs = (int64_t)unitToSeconds(config.duration.unit);
+        int64_t totalSecs = (int64_t)config.duration.value * unitSecs;
+        int64_t remainingSecs = totalSecs - diffSeconds;
+        return (remainingSecs > 0) ? remainingSecs : 0;
+    }
+
+    bool isTimerActive() const {
+        if (timerStopped) return false;
+        return getCurrentValueRemaining() > 0;
+    }
+
+    // Залишено для сумісності, але не використовується в критичних місцях
+    time_t calculateEndTime() const {
+        int64_t start64 = (int64_t)config.startTime;
+        int64_t addSecs = (int64_t)config.duration.value * unitToSeconds(config.duration.unit);
+        int64_t end64 = start64 + addSecs;
+        if (end64 > INT32_MAX) return (time_t)INT32_MAX;
+        if (end64 < 0) return 0;
+        return (time_t)end64;
     }
 };
 

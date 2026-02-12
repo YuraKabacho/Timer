@@ -1,45 +1,34 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
-
 #include <LittleFS.h>
 #include <ESPmDNS.h>
-
 #include <WiFiManager.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
-
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 
 #include "ConfigManager.h"
+#include "SegmentController.h"  // для updateAllSegments
 
 extern ConfigManager configManager;
 
-// Глобальні об'єкти для NTP
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 7200, 60000); // GMT+2, оновлення кожні 60с
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 7200, 60000);
 
-// Стан таймера: зупинений чи активний
-bool timerStopped = false;
-time_t lastSyncTime = 0;   // час останньої успішної синхронізації NTP
+bool timerStopped = true;
+time_t lastSyncTime = 0;
 
-/* ============================================================================
-   Ініціалізація контролера часу
-   ============================================================================ */
 void setupTimerController() {
     Serial.println("Initializing Timer Controller...");
-
     timeClient.begin();
-
-    // Перша синхронізація при старті (якщо WiFi є)
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("Synchronizing time with NTP...");
         if (timeClient.update()) {
             time_t now = timeClient.getEpochTime();
             lastSyncTime = now;
-            // Встановлюємо системний час ESP32
             struct timeval tv = {now, 0};
             settimeofday(&tv, nullptr);
             Serial.println("Time synchronized successfully");
@@ -48,12 +37,24 @@ void setupTimerController() {
         }
     }
 
+    // --- ВІДНОВЛЕННЯ СТАНУ ТАЙМЕРА ПІСЛЯ ПЕРЕЗАВАНТАЖЕННЯ ---
+    bool wasRunning = configManager.loadTimerState();
+    if (wasRunning) {
+        Serial.println("Timer was running before reboot – resuming...");
+        timerStopped = false;
+        
+        // Обчислюємо актуальний залишок і переміщуємо двигуни
+        int remaining = configManager.getCurrentValueRemaining();
+        updateAllSegments(remaining);
+        Serial.printf("Resumed with remaining: %d\n", remaining);
+    } else {
+        Serial.println("Timer was stopped before reboot – staying stopped");
+        timerStopped = true;
+    }
+
     Serial.println("Timer Controller ready");
 }
 
-/* ============================================================================
-   Синхронізація часу (ручний виклик)
-   ============================================================================ */
 void syncTimeWithNTP() {
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("Manual time synchronization...");
@@ -67,38 +68,28 @@ void syncTimeWithNTP() {
     }
 }
 
-/* ============================================================================
-   Автоматична синхронізація за розкладом
-   ============================================================================ */
 void checkAutoSync() {
     if (!configManager.getConfig().autoSync) return;
-
     time_t now = time(nullptr);
     if (now == 0) return;
-
     struct tm *timeinfo = localtime(&now);
-
-    // Якщо поточна година збігається із заданою, хвилини = 0, секунди = 0,
-    // і минуло більше години після останньої синхронізації – виконуємо
     if (timeinfo->tm_hour == configManager.getConfig().syncHour24 &&
         timeinfo->tm_min == 0 &&
         timeinfo->tm_sec == 0 &&
         (now - lastSyncTime) > 3600) {
-
         syncTimeWithNTP();
     }
 }
 
-/* ============================================================================
-   Керування станом таймера
-   ============================================================================ */
 void stopTimer() {
     timerStopped = true;
+    configManager.saveTimerState(false);
     Serial.println("Timer stopped");
 }
 
 void startTimer() {
     timerStopped = false;
+    configManager.saveTimerState(true);
     Serial.println("Timer started");
 }
 
@@ -106,37 +97,29 @@ bool isTimerStopped() {
     return timerStopped;
 }
 
-/* ============================================================================
-   Рядкові представлення для UI
-   ============================================================================ */
 String getTimeRemainingString() {
     if (!configManager.isTimerActive() || timerStopped) {
         return "Таймер зупинено";
     }
-
-    int daysRemaining = configManager.getCurrentDaysRemaining();
-
-    if (daysRemaining <= 0) {
+    int remaining = configManager.getCurrentValueRemaining();
+    if (remaining <= 0) {
         return "Час вийшов";
     }
-
+    DurationUnit u = configManager.getConfig().duration.unit;
+    const char* unitStr;
+    switch(u) {
+        case UNIT_DAYS:    unitStr = "дн."; break;
+        case UNIT_HOURS:   unitStr = "год."; break;
+        case UNIT_MINUTES: unitStr = "хв."; break;
+        case UNIT_SECONDS: unitStr = "сек."; break;
+        default:           unitStr = "дн."; break;
+    }
     char buffer[50];
-    sprintf(buffer, "%d днів", daysRemaining);
+    sprintf(buffer, "%d %s", remaining, unitStr);
     return String(buffer);
 }
 
-String getEndDateDisplay() {
-    time_t endTime = configManager.calculateEndTime();
-    struct tm *timeinfo = localtime(&endTime);
-    char buffer[50];
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
-    return String(buffer);
-}
-
-/* ============================================================================
-   Оновлення контролера (викликати в loop)
-   ============================================================================ */
 void updateTimerController() {
-    timeClient.update();    // опитування NTP‑сервера (без блокування)
-    checkAutoSync();        // перевірка автоматичної синхронізації
+    timeClient.update();
+    checkAutoSync();
 }
