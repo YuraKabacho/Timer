@@ -11,16 +11,22 @@
 #include <WiFiUdp.h>
 
 #include "ConfigManager.h"
-#include "SegmentController.h"  // для updateAllSegments
+#include "SegmentController.h"
 
 extern ConfigManager configManager;
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 7200, 60000);
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 7200, 60000); // UTC+2
 
-bool timerStopped = true;
-time_t lastSyncTime = 0;
+bool timerStopped = true;          // current run state
+time_t lastSyncTime = 0;           // last successful NTP sync
 
+// Forward declaration of broadcast function
+extern void broadcastState();
+
+/**
+ * Initialise timer controller: start NTP and restore previous timer state.
+ */
 void setupTimerController() {
     Serial.println("Initializing Timer Controller...");
     timeClient.begin();
@@ -37,13 +43,12 @@ void setupTimerController() {
         }
     }
 
-    // --- ВІДНОВЛЕННЯ СТАНУ ТАЙМЕРА ПІСЛЯ ПЕРЕЗАВАНТАЖЕННЯ ---
+    // Restore timer running state from NVS
     bool wasRunning = configManager.loadTimerState();
     if (wasRunning) {
         Serial.println("Timer was running before reboot – resuming...");
         timerStopped = false;
-        
-        // Обчислюємо актуальний залишок і переміщуємо двигуни
+
         int remaining = configManager.getCurrentValueRemaining();
         updateAllSegments(remaining);
         Serial.printf("Resumed with remaining: %d\n", remaining);
@@ -55,6 +60,9 @@ void setupTimerController() {
     Serial.println("Timer Controller ready");
 }
 
+/**
+ * Manually trigger NTP sync and update system time.
+ */
 void syncTimeWithNTP() {
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("Manual time synchronization...");
@@ -64,10 +72,14 @@ void syncTimeWithNTP() {
             struct timeval tv = {now, 0};
             settimeofday(&tv, nullptr);
             Serial.println("Time synchronized manually");
+            broadcastState();   // notify clients of new time
         }
     }
 }
 
+/**
+ * Check if auto‑sync is due (once per day at configured hour).
+ */
 void checkAutoSync() {
     if (!configManager.getConfig().autoSync) return;
     time_t now = time(nullptr);
@@ -76,27 +88,41 @@ void checkAutoSync() {
     if (timeinfo->tm_hour == configManager.getConfig().syncHour24 &&
         timeinfo->tm_min == 0 &&
         timeinfo->tm_sec == 0 &&
-        (now - lastSyncTime) > 3600) {
+        (now - lastSyncTime) > 3600) {   // at least one hour since last sync
         syncTimeWithNTP();
     }
 }
 
+/**
+ * Stop the timer (pause countdown).
+ */
 void stopTimer() {
     timerStopped = true;
     configManager.saveTimerState(false);
     Serial.println("Timer stopped");
+    broadcastState();
 }
 
+/**
+ * Start the timer (resume countdown).
+ */
 void startTimer() {
     timerStopped = false;
     configManager.saveTimerState(true);
     Serial.println("Timer started");
+    broadcastState();
 }
 
+/**
+ * Check if timer is currently stopped.
+ */
 bool isTimerStopped() {
     return timerStopped;
 }
 
+/**
+ * Get a human‑readable string of remaining time (e.g., "5 дн.").
+ */
 String getTimeRemainingString() {
     if (!configManager.isTimerActive() || timerStopped) {
         return "Таймер зупинено";
@@ -119,7 +145,10 @@ String getTimeRemainingString() {
     return String(buffer);
 }
 
+/**
+ * Called from main loop – updates NTP client and checks auto‑sync.
+ */
 void updateTimerController() {
-    timeClient.update();
+    timeClient.update();    // keep NTP client updated
     checkAutoSync();
 }

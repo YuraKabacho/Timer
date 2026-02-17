@@ -16,22 +16,100 @@
 #include "ConfigManager.h"
 #include "SegmentController.h"
 
+// External references
 extern ConfigManager configManager;
-
 extern bool timerStopped;
 extern WiFiUDP ntpUDP;
 extern NTPClient timeClient;
 
-extern void syncTimeWithNTP();
-extern void stopTimer();
-extern void startTimer();
-extern bool isTimerStopped();
-extern String getTimeRemainingString();
+// Function prototypes (defined later in this file)
+String getTimeStringFromRTC();
+String formatDate(time_t t);
+String formatTime(time_t t);
+String unitToString(DurationUnit u);
+DurationUnit stringToUnit(const String& s);
 
+void syncTimeWithNTP();
+void stopTimer();
+void startTimer();
+bool isTimerStopped();
+String getTimeRemainingString();
+
+// Global web server and WiFiManager instances
 AsyncWebServer server(80);
 WiFiManager wm;
 
-// ------------------------------------------------------------
+// -------------------------------------------------------------------
+// WebSocket for real‑time updates
+// -------------------------------------------------------------------
+AsyncWebSocket ws("/ws");   // WebSocket endpoint
+
+/**
+ * Broadcast current state to all connected WebSocket clients.
+ * JSON structure matches /api/state.
+ */
+void broadcastState() {
+    JsonDocument doc;
+    auto& config = configManager.getConfig();
+
+    doc["motorsHomed"] = areMotorsHomed();
+    doc["timerStopped"] = isTimerStopped();
+    doc["currentTimeFormatted"] = getTimeStringFromRTC();
+    doc["timeRemaining"] = getTimeRemainingString();
+    doc["calibrationInProgress"] = isCalibrationInProgress();
+
+    int* digits = getCurrentDigits();
+    JsonArray segmentValues = doc["segmentValues"].to<JsonArray>();
+    for (int i = 0; i < 4; i++) segmentValues.add(digits[i]);
+
+    doc["durationValue"] = config.duration.value;
+    doc["durationUnit"] = unitToString(config.duration.unit);
+    doc["syncHour"] = config.syncHour24;
+    doc["autoSync"] = config.autoSync;
+    doc["startDate"] = formatDate(config.startTime);
+    doc["startTime"] = formatTime(config.startTime);
+    doc["useCurrentOnStart"] = config.useCurrentOnStart;
+    doc["startTimestamp"] = config.startTime;
+    doc["calibrateOnStart"] = config.calibrateOnStart;   // new field
+
+    // Remaining seconds (safe 64‑bit)
+    if (!timerStopped && configManager.isTimerActive()) {
+        doc["remainingSeconds"] = configManager.getRemainingSeconds();
+    } else {
+        doc["remainingSeconds"] = 0;
+    }
+
+    String response;
+    serializeJson(doc, response);
+    ws.textAll(response);   // send to all clients
+}
+
+/**
+ * WebSocket event handler.
+ */
+void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
+               AwsEventType type, void *arg, uint8_t *data, size_t len) {
+    switch (type) {
+        case WS_EVT_CONNECT:
+            Serial.printf("WebSocket client #%u connected\n", client->id());
+            // Send current state immediately on connect
+            broadcastState();
+            break;
+        case WS_EVT_DISCONNECT:
+            Serial.printf("WebSocket client #%u disconnected\n", client->id());
+            break;
+        case WS_EVT_DATA:
+            // We don't process incoming messages – client only listens
+            break;
+        case WS_EVT_PONG:
+        case WS_EVT_ERROR:
+            break;
+    }
+}
+
+// -------------------------------------------------------------------
+// LittleFS and WiFi helpers
+// -------------------------------------------------------------------
 void setupLittleFS() {
     if (!LittleFS.begin(true)) {
         Serial.println("LittleFS mount failed");
@@ -68,7 +146,9 @@ void setupMDNS() {
     MDNS.addService("http", "tcp", 80);
 }
 
-// ------------------------------------------------------------
+// -------------------------------------------------------------------
+// Time formatting helpers
+// -------------------------------------------------------------------
 String getTimeStringFromRTC() {
     time_t now = time(nullptr);
     if (now == 0) return "--:--:--";
@@ -92,7 +172,9 @@ String formatTime(time_t t) {
     return String(buf);
 }
 
-// ------------------------------------------------------------
+// -------------------------------------------------------------------
+// Duration unit conversion
+// -------------------------------------------------------------------
 String unitToString(DurationUnit u) {
     switch(u) {
         case UNIT_DAYS:    return "days";
@@ -110,10 +192,17 @@ DurationUnit stringToUnit(const String& s) {
     return UNIT_DAYS;
 }
 
-// ------------------------------------------------------------
+// -------------------------------------------------------------------
+// Web server setup – REST endpoints and static files
+// -------------------------------------------------------------------
 void setupWebServer() {
     timeClient.begin();
 
+    // Attach WebSocket handler
+    ws.onEvent(onWsEvent);
+    server.addHandler(&ws);
+
+    // ---------- REST API ----------
     server.on("/api/state", HTTP_GET, [](AsyncWebServerRequest *request) {
         JsonDocument doc;
         auto& config = configManager.getConfig();
@@ -136,8 +225,8 @@ void setupWebServer() {
         doc["startTime"] = formatTime(config.startTime);
         doc["useCurrentOnStart"] = config.useCurrentOnStart;
         doc["startTimestamp"] = config.startTime;
+        doc["calibrateOnStart"] = config.calibrateOnStart;
 
-        // Залишок у секундах (безпечне 64-бітне обчислення)
         if (!timerStopped && configManager.isTimerActive()) {
             doc["remainingSeconds"] = configManager.getRemainingSeconds();
         } else {
@@ -160,6 +249,7 @@ void setupWebServer() {
         doc["startTime"] = formatTime(config.startTime);
         doc["useCurrentOnStart"] = config.useCurrentOnStart;
         doc["startTimestamp"] = config.startTime;
+        doc["calibrateOnStart"] = config.calibrateOnStart;
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
@@ -187,31 +277,15 @@ void setupWebServer() {
             auto& config = configManager.getConfig();
             bool oldUseCurrentOnStart = config.useCurrentOnStart;
 
-            bool newUseCurrentOnStart = config.useCurrentOnStart;
-            if (!doc["useCurrentOnStart"].isNull()) {
-                newUseCurrentOnStart = doc["useCurrentOnStart"];
-            }
+            // Read all fields with defaults
+            bool newUseCurrentOnStart = doc["useCurrentOnStart"] | config.useCurrentOnStart;
+            int newDurationValue = doc["durationValue"] | config.duration.value;
+            DurationUnit newDurationUnit = doc["durationUnit"].isNull() ? config.duration.unit : stringToUnit(doc["durationUnit"].as<String>());
+            int newSyncHour = doc["syncHour"] | config.syncHour24;
+            bool newAutoSync = doc["autoSync"] | config.autoSync;
+            bool newCalibrateOnStart = doc["calibrateOnStart"] | config.calibrateOnStart;
 
-            int newDurationValue = config.duration.value;
-            if (!doc["durationValue"].isNull()) {
-                newDurationValue = doc["durationValue"];
-            }
-
-            DurationUnit newDurationUnit = config.duration.unit;
-            if (!doc["durationUnit"].isNull()) {
-                newDurationUnit = stringToUnit(doc["durationUnit"].as<String>());
-            }
-
-            int newSyncHour = config.syncHour24;
-            if (!doc["syncHour"].isNull()) {
-                newSyncHour = doc["syncHour"];
-            }
-
-            bool newAutoSync = config.autoSync;
-            if (!doc["autoSync"].isNull()) {
-                newAutoSync = doc["autoSync"];
-            }
-
+            // Handle start time logic
             if (newUseCurrentOnStart && !oldUseCurrentOnStart) {
                 if (!timerStopped) {
                     stopTimer();
@@ -224,6 +298,7 @@ void setupWebServer() {
             config.duration.unit = newDurationUnit;
             config.syncHour24 = newSyncHour;
             config.autoSync = newAutoSync;
+            config.calibrateOnStart = newCalibrateOnStart;
 
             if (newUseCurrentOnStart && timerStopped) {
                 config.startTime = time(nullptr);
@@ -253,6 +328,9 @@ void setupWebServer() {
                 updateAllSegments(remaining);
             }
 
+            // Broadcast updated state to all clients
+            broadcastState();
+
             request->send(200, "application/json", "{\"success\":true}");
         }
     );
@@ -273,16 +351,19 @@ void setupWebServer() {
             stopTimer();
             request->send(200, "application/json", "{\"status\":\"stopped\"}");
         }
+        broadcastState();   // notify all clients
     });
 
     server.on("/api/sync", HTTP_POST, [](AsyncWebServerRequest *request) {
         syncTimeWithNTP();
         request->send(200, "application/json", "{\"success\":true}");
+        broadcastState();   // time may have changed
     });
 
     server.on("/api/calibrate", HTTP_POST, [](AsyncWebServerRequest *request) {
         if (startCalibration()) {
             request->send(200, "application/json", "{\"success\":true, \"message\":\"Calibration started\"}");
+            broadcastState();   // calibration in progress now
         } else {
             request->send(429, "application/json", "{\"error\":\"Calibration already in progress\"}");
         }
@@ -298,6 +379,7 @@ void setupWebServer() {
         if (segment >= 0 && segment < 4 && value >= 0 && value <= 9) {
             setSegmentValue(segment, value);
             request->send(200, "application/json", "{\"success\":true}");
+            broadcastState();   // digits may change (async, but will reflect soon)
         } else {
             request->send(400, "application/json", "{\"error\":\"Invalid parameters\"}");
         }
@@ -312,11 +394,13 @@ void setupWebServer() {
         if (value >= 0 && value <= 9999) {
             setAllSegmentsValue(value);
             request->send(200, "application/json", "{\"success\":true}");
+            broadcastState();
         } else {
             request->send(400, "application/json", "{\"error\":\"Invalid value (0-9999)\"}");
         }
     });
 
+    // Serve static files from LittleFS
     server.serveStatic("/", LittleFS, "/")
           .setDefaultFile("index.html")
           .setTryGzipFirst(false)

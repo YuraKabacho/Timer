@@ -14,43 +14,55 @@
 #include <WiFiUdp.h>
 
 #include "ConfigManager.h"
-#include "SegmentController.h"  // додано
+#include "SegmentController.h"
 
+// Global config manager instance
 ConfigManager configManager;
 
-// Зовнішні функції
+// External functions from other modules
 void setupLittleFS();
 void setupWiFi();
 void setupMDNS();
 void setupWebServer();
-void setupSegmentController();   // тепер з .h
+void setupSegmentController();
 void setupTimerController();
 
-// Зовнішні змінні
+// External variables (declared elsewhere)
 extern bool timerStopped;
 extern AsyncWebServer server;
 extern WiFiManager wm;
 
-// Функції оновлення
-extern void updateTimer();          // з SegmentController.cpp
-extern void updateTimerController(); // з TimerController.cpp
+// External update functions
+extern void updateTimer();          // from SegmentController.cpp
+extern void updateTimerController(); // from TimerController.cpp
 
+/**
+ * Arduino setup – runs once at startup.
+ */
 void setup() {
     Serial.begin(115200);
     delay(500);
 
+    // Initialize I2C for PCF8575 and DS3231
     Wire.begin(8, 9);
     Wire.setClock(400000);
 
+    // Mount LittleFS for web files
     setupLittleFS();
-    setupWiFi();
+    setupWiFi();                     // WiFiManager portal if needed
 
+    // Load configuration from NVS
     configManager.begin();
     configManager.load();
 
+    // mDNS for http://timer.local
     setupMDNS();
-    setupSegmentController();
-    setupTimerController();
+
+    // Initialize hardware controllers
+    setupSegmentController();        // motors, Hall sensors, PCFs
+    setupTimerController();          // NTP, timer logic
+
+    // Start web server with REST API and WebSocket
     setupWebServer();
 
     Serial.println("Setup complete!");
@@ -59,8 +71,11 @@ void setup() {
     Serial.println("Or: http://timer.local");
 }
 
+/**
+ * Arduino main loop – calls non‑blocking updates.
+ */
 void loop() {
-    updateTimer();
-    updateTimerController();
-    delay(10);
+    updateTimer();                   // checks if timer needs to move digits
+    updateTimerController();         // NTP sync, auto‑sync logic
+    delay(10);                       // small yield
 }

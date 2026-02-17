@@ -312,6 +312,39 @@ body {
     font-size: 1.1rem;
 }
 
+.start-group {
+    display: flex;
+    gap: 10px;
+}
+
+.start-group .btn {
+    flex: 1;
+}
+
+.start-group .btn:first-child {
+    flex: 3;
+}
+
+.start-group .btn-icon {
+    flex: 1;
+    padding: 15px 0;
+    background: var(--bg-light);
+    color: var(--text-primary);
+    border: 2px solid transparent;
+    transition: var(--transition);
+}
+
+.start-group .btn-icon.active {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-dark);
+}
+
+.start-group .btn-icon:hover {
+    background: var(--bg-lighter);
+    transform: translateY(-2px);
+}
+
 /* ========== ТРИВАЛІСТЬ ВІДЛІКУ (ЦИФРИ) ========== */
 .test-display {
     background: rgba(0, 0, 0, 0.5);
@@ -647,6 +680,57 @@ body {
     color: white;
 }
 
+/* ========== ПЕРСИСТЕНТНЕ СПОВІЩЕННЯ ========== */
+.persistent-notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    max-width: 400px;
+    background: var(--bg-card);
+    border-radius: 8px;
+    box-shadow: var(--box-shadow);
+    border-left: 4px solid var(--warning-color);
+    z-index: 2000;
+    transition: opacity 0.3s ease;
+}
+
+.persistent-notification.hidden {
+    display: none;
+}
+
+.persistent-notification .notification-content {
+    padding: 15px 20px;
+    position: relative;
+    color: var(--text-primary);
+}
+
+.persistent-notification .close-btn {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.2s;
+}
+
+.persistent-notification .close-btn:hover {
+    color: var(--danger-color);
+}
+
+.persistent-notification .notification-message {
+    margin-right: 25px;
+    line-height: 1.5;
+}
+
+.persistent-notification.warning {
+    border-left-color: var(--warning-color);
+}
+
+.persistent-notification.info {
+    border-left-color: var(--info-color);
+}
+
 /* ========== FOOTER ========== */
 .footer {
     margin-top: 30px;
@@ -780,6 +864,10 @@ body {
     
     .unit-card {
         flex: 1 1 calc(50% - 10px);
+    }
+
+    .start-group {
+        flex-direction: row;
     }
 }
 
