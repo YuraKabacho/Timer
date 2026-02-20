@@ -21,6 +21,9 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 7200, 60000); // UTC+2
 bool timerStopped = true;          // current run state
 time_t lastSyncTime = 0;           // last successful NTP sync
 
+// Прапорець для автоматичного перезапуску після синхронізації + калібрування
+static bool pendingRestart = false;
+
 // Forward declaration of broadcast function
 extern void broadcastState();
 
@@ -58,39 +61,6 @@ void setupTimerController() {
     }
 
     Serial.println("Timer Controller ready");
-}
-
-/**
- * Manually trigger NTP sync and update system time.
- */
-void syncTimeWithNTP() {
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("Manual time synchronization...");
-        if (timeClient.update()) {
-            time_t now = timeClient.getEpochTime();
-            lastSyncTime = now;
-            struct timeval tv = {now, 0};
-            settimeofday(&tv, nullptr);
-            Serial.println("Time synchronized manually");
-            broadcastState();   // notify clients of new time
-        }
-    }
-}
-
-/**
- * Check if auto‑sync is due (once per day at configured hour).
- */
-void checkAutoSync() {
-    if (!configManager.getConfig().autoSync) return;
-    time_t now = time(nullptr);
-    if (now == 0) return;
-    struct tm *timeinfo = localtime(&now);
-    if (timeinfo->tm_hour == configManager.getConfig().syncHour24 &&
-        timeinfo->tm_min == 0 &&
-        timeinfo->tm_sec == 0 &&
-        (now - lastSyncTime) > 3600) {   // at least one hour since last sync
-        syncTimeWithNTP();
-    }
 }
 
 /**
@@ -146,9 +116,84 @@ String getTimeRemainingString() {
 }
 
 /**
- * Called from main loop – updates NTP client and checks auto‑sync.
+ * Manually trigger NTP sync and update system time.
+ * Під час синхронізації: зупиняємо таймер, запам'ятовуємо, чи треба буде перезапустити,
+ * запускаємо калібрування. Після калібрування автоматично перевіримо в updateTimerController().
+ */
+void syncTimeWithNTP() {
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Manual time synchronization...");
+
+        // Запам'ятовуємо, чи таймер був запущений і чи є ще час
+        bool wasRunning = !timerStopped && configManager.isTimerActive();
+
+        // Зупиняємо таймер
+        if (!timerStopped) {
+            stopTimer();
+        }
+
+        // Виконуємо синхронізацію
+        if (timeClient.update()) {
+            time_t now = timeClient.getEpochTime();
+            lastSyncTime = now;
+            struct timeval tv = {now, 0};
+            settimeofday(&tv, nullptr);
+            Serial.println("Time synchronized manually");
+
+            // Запускаємо калібрування (воно не блокує)
+            if (startCalibration()) {
+                Serial.println("Calibration started after NTP sync");
+                // Встановлюємо прапорець для автоматичного перезапуску після калібрування
+                pendingRestart = wasRunning;
+            } else {
+                // Якщо калібрування не запустилось (наприклад, вже триває), просто ігноруємо перезапуск
+                pendingRestart = false;
+            }
+        } else {
+            Serial.println("Failed to sync time");
+            pendingRestart = false;
+        }
+
+        broadcastState();   // notify clients of new time
+    }
+}
+
+/**
+ * Check if auto‑sync is due (once per day at configured hour).
+ */
+void checkAutoSync() {
+    if (!configManager.getConfig().autoSync) return;
+    time_t now = time(nullptr);
+    if (now == 0) return;
+    struct tm *timeinfo = localtime(&now);
+    if (timeinfo->tm_hour == configManager.getConfig().syncHour24 &&
+        timeinfo->tm_min == 0 &&
+        timeinfo->tm_sec == 0 &&
+        (now - lastSyncTime) > 3600) {   // at least one hour since last sync
+        syncTimeWithNTP();
+    }
+}
+
+/**
+ * Called from main loop – updates NTP client, checks auto‑sync,
+ * and handles pending restart after calibration.
  */
 void updateTimerController() {
     timeClient.update();    // keep NTP client updated
     checkAutoSync();
+
+    // Якщо очікується перезапуск і калібрування завершене
+    if (pendingRestart) {
+        if (!isCalibrationInProgress()) {
+            // Калібрування завершено (успішно чи ні)
+            if (areMotorsHomed() && configManager.getCurrentValueRemaining() > 0) {
+                // Все добре – запускаємо таймер
+                startTimer();
+                Serial.println("Timer auto‑restarted after NTP sync and calibration");
+            } else {
+                Serial.println("Timer not restarted: calibration failed or time expired");
+            }
+            pendingRestart = false; // скидаємо прапорець
+        }
+    }
 }

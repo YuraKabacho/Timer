@@ -14,20 +14,29 @@ class SplitFlopController {
 
     this.testDigits = [0, 0, 0, 0];
     this.hourDigits = [0, 0];
-    this.physicalUpdateTimers = [null, null, null, null];
+    this.fullUpdateTimer = null;
 
     this.currentTime = null;
     this.endDateString = "Обчислюється...";
     this.startMomentStatic = null;
-    this.timeoutWarningShown = false;
+    this.timeoutWarningShown = false; // прапорець, щоб не показувати сповіщення двічі
 
     this.calibrateOnStart = false;
     this.ws = null;
+    this.calibrationInProgress = false;
+    this.motorsHomed = true; // чи відкалібровані двигуни
+    this.savedTestDigits = [...this.testDigits];
+
+    // Для тултіпа
+    this.tooltip = null;
+    this.tooltipVisible = false;
+    this.tooltipText = "";
 
     this.init();
   }
 
   async init() {
+    this.createTooltipElement();
     this.initEventListeners();
     this.initTestDigits();
     this.initHourDigits();
@@ -46,8 +55,48 @@ class SplitFlopController {
 
     setInterval(() => {
       console.log("Auto‑save (5 min)");
-      this.saveConfig(false); // без toast
+      this.saveConfig(false);
     }, 300000);
+  }
+
+  // Створюємо елемент для кастомного тултіпа
+  createTooltipElement() {
+    this.tooltip = document.createElement("div");
+    this.tooltip.id = "custom-tooltip";
+    this.tooltip.style.position = "fixed";
+    this.tooltip.style.display = "none";
+    this.tooltip.style.backgroundColor = "rgba(0,0,0,0.8)";
+    this.tooltip.style.color = "#fff";
+    this.tooltip.style.padding = "8px 12px";
+    this.tooltip.style.borderRadius = "4px";
+    this.tooltip.style.fontSize = "14px";
+    this.tooltip.style.zIndex = "10000";
+    this.tooltip.style.pointerEvents = "none";
+    this.tooltip.style.whiteSpace = "nowrap";
+    this.tooltip.style.boxShadow = "0 2px 10px rgba(0,0,0,0.2)";
+    document.body.appendChild(this.tooltip);
+
+    // Відстеження руху миші для позиціонування
+    document.addEventListener("mousemove", (e) => {
+      if (this.tooltipVisible) {
+        this.tooltip.style.left = e.clientX + 15 + "px";
+        this.tooltip.style.top = e.clientY + 15 + "px";
+      }
+    });
+  }
+
+  showTooltip(text, x, y) {
+    this.tooltipText = text;
+    this.tooltip.textContent = text;
+    this.tooltip.style.display = "block";
+    this.tooltip.style.left = x + 15 + "px";
+    this.tooltip.style.top = y + 15 + "px";
+    this.tooltipVisible = true;
+  }
+
+  hideTooltip() {
+    this.tooltip.style.display = "none";
+    this.tooltipVisible = false;
   }
 
   // ---------- WebSocket ----------
@@ -76,7 +125,16 @@ class SplitFlopController {
   }
 
   handleWebSocketData(data) {
-    // Update current time
+    // Оновлюємо стан калібрування та моторів
+    if (data.calibrationInProgress !== undefined) {
+      this.calibrationInProgress = data.calibrationInProgress;
+      this.updateUIBlockedState();
+    }
+    if (data.motorsHomed !== undefined) {
+      this.motorsHomed = data.motorsHomed;
+      this.updateUIBlockedState();
+    }
+
     if (data.currentTimeFormatted) {
       document.getElementById("current-time").textContent =
         data.currentTimeFormatted;
@@ -88,7 +146,6 @@ class SplitFlopController {
       this.currentTime = now;
     }
 
-    // Update remaining time strings
     if (data.timeRemaining) {
       document.getElementById("time-remaining").textContent =
         data.timeRemaining;
@@ -98,7 +155,6 @@ class SplitFlopController {
       document.getElementById("time-remaining-detailed").textContent = detailed;
     }
 
-    // Calibration badge
     if (
       data.motorsHomed !== undefined ||
       data.calibrationInProgress !== undefined
@@ -106,7 +162,6 @@ class SplitFlopController {
       this.updateCalibrationBadge(data.motorsHomed, data.calibrationInProgress);
     }
 
-    // Simulation digits (physical display)
     if (data.segmentValues) {
       const digits = document.querySelectorAll(".digit-sim");
       digits.forEach((digit, index) => {
@@ -120,7 +175,6 @@ class SplitFlopController {
       });
     }
 
-    // Оновлення тестових цифр (тривалість) ТІЛЬКИ ЯКЩО ЗМІНИЛОСЬ ЗНАЧЕННЯ
     if (
       data.durationValue !== undefined &&
       data.durationValue !== this.config.durationValue
@@ -134,9 +188,9 @@ class SplitFlopController {
         );
         if (digitEl) digitEl.textContent = this.testDigits[i];
       }
+      this.savedTestDigits = [...this.testDigits];
     }
 
-    // Timer state
     if (data.timerStopped !== undefined) {
       this.config.timerStopped = data.timerStopped;
       this.updateStartStopButton();
@@ -147,7 +201,6 @@ class SplitFlopController {
       }
     }
 
-    // Start moment
     if (data.startTimestamp && !this.config.timerStopped) {
       const serverStart = new Date(data.startTimestamp * 1000);
       if (
@@ -158,7 +211,6 @@ class SplitFlopController {
       }
     }
 
-    // ---------- Оновлення полів дати/часу для інших клієнтів ----------
     if (data.startDate && data.startTime && !this.config.useCurrentOnStart) {
       const dateInput = document.getElementById("start-date");
       const timeInput = document.getElementById("start-time");
@@ -173,7 +225,6 @@ class SplitFlopController {
       this.calculateEndDate();
     }
 
-    // Other config fields
     if (data.durationUnit) {
       this.config.durationUnit = data.durationUnit;
       this.setActiveUnit(data.durationUnit);
@@ -202,6 +253,107 @@ class SplitFlopController {
     this.updateStartMomentDisplay();
   }
 
+  // ---------- Блокування UI залежно від стану калібрування ----------
+  updateUIBlockedState() {
+    const blocked = this.calibrationInProgress || !this.motorsHomed;
+    const startBtn = document.getElementById("btn-start-stop");
+    const digitControls = document.querySelectorAll(
+      ".test-digit .digit-btn, .test-digit .digit-number",
+    );
+    const unitCards = document.querySelectorAll(".unit-card");
+    const hourControls = document.querySelectorAll(
+      "#hour-digits .digit-btn, #hour-digits .digit-number",
+    );
+
+    const tooltipMessage = this.calibrationInProgress
+      ? "⏳ Триває калібрування, зачекайте"
+      : "⚠️ Таймер не відкалібрований";
+
+    if (blocked) {
+      // Блокуємо кнопку старт
+      if (startBtn) {
+        startBtn.disabled = true;
+        startBtn.style.opacity = "0.5";
+        startBtn.style.pointerEvents = "none";
+        this.attachTooltip(startBtn, tooltipMessage);
+      }
+
+      // Блокуємо елементи керування цифрами
+      digitControls.forEach((el) => {
+        el.style.pointerEvents = "none";
+        el.style.opacity = "0.5";
+        this.attachTooltip(el, tooltipMessage);
+      });
+
+      // Блокуємо вибір одиниць
+      unitCards.forEach((card) => {
+        card.style.pointerEvents = "none";
+        card.style.opacity = "0.5";
+        this.attachTooltip(card, tooltipMessage);
+      });
+
+      // Блокуємо години синхронізації
+      hourControls.forEach((el) => {
+        el.style.pointerEvents = "none";
+        el.style.opacity = "0.5";
+        this.attachTooltip(el, tooltipMessage);
+      });
+    } else {
+      // Розблоковуємо
+      if (startBtn) {
+        startBtn.disabled = false;
+        startBtn.style.opacity = "1";
+        startBtn.style.pointerEvents = "auto";
+        this.removeTooltip(startBtn);
+      }
+
+      digitControls.forEach((el) => {
+        el.style.pointerEvents = "auto";
+        el.style.opacity = "1";
+        this.removeTooltip(el);
+      });
+
+      unitCards.forEach((card) => {
+        card.style.pointerEvents = "auto";
+        card.style.opacity = "1";
+        this.removeTooltip(card);
+      });
+
+      hourControls.forEach((el) => {
+        el.style.pointerEvents = "auto";
+        el.style.opacity = "1";
+        this.removeTooltip(el);
+      });
+    }
+  }
+
+  attachTooltip(element, message) {
+    // Видаляємо попередній listener, щоб не накопичувати
+    element.removeEventListener("mouseenter", element._tooltipEnter);
+    element.removeEventListener("mouseleave", element._tooltipLeave);
+
+    const enterHandler = (e) => {
+      this.showTooltip(message, e.clientX, e.clientY);
+    };
+    const leaveHandler = () => {
+      this.hideTooltip();
+    };
+
+    element.addEventListener("mouseenter", enterHandler);
+    element.addEventListener("mouseleave", leaveHandler);
+
+    // Зберігаємо посилання для можливого видалення
+    element._tooltipEnter = enterHandler;
+    element._tooltipLeave = leaveHandler;
+  }
+
+  removeTooltip(element) {
+    element.removeEventListener("mouseenter", element._tooltipEnter);
+    element.removeEventListener("mouseleave", element._tooltipLeave);
+    delete element._tooltipEnter;
+    delete element._tooltipLeave;
+  }
+
   // ---------- Config loading / saving ----------
   async loadConfig() {
     try {
@@ -228,6 +380,7 @@ class SplitFlopController {
           );
           if (digitEl) digitEl.textContent = this.testDigits[i];
         }
+        this.savedTestDigits = [...this.testDigits];
       }
 
       if (data.durationUnit) {
@@ -301,7 +454,7 @@ class SplitFlopController {
         if (showToast) {
           this.showToast("Налаштування збережено успішно", "success");
         }
-        await this.loadConfig(); // синхронізуємо з сервером
+        await this.loadConfig();
       } else {
         const error = await response
           .json()
@@ -362,17 +515,32 @@ class SplitFlopController {
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
   }
 
-  setPhysicalDigit(segment, value) {
-    if (this.physicalUpdateTimers[segment]) {
-      clearTimeout(this.physicalUpdateTimers[segment]);
+  scheduleFullUpdate() {
+    if (this.fullUpdateTimer) {
+      clearTimeout(this.fullUpdateTimer);
     }
-    this.physicalUpdateTimers[segment] = setTimeout(() => {
-      fetch("/api/test", {
+    this.fullUpdateTimer = setTimeout(() => {
+      this.sendFullValue();
+    }, 300);
+  }
+
+  async sendFullValue() {
+    if (this.calibrationInProgress || !this.motorsHomed) {
+      console.log(
+        "Calibration in progress or motors not homed – not sending value",
+      );
+      return;
+    }
+    const fullValue = parseInt(this.testDigits.join(""), 10) || 0;
+    try {
+      await fetch("/api/testall", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `segment=${segment}&value=${value}`,
-      }).catch((err) => console.error("Physical update failed:", err));
-    }, 200);
+        body: `value=${fullValue}`,
+      });
+    } catch (err) {
+      console.error("Failed to set full value:", err);
+    }
   }
 
   initTestDigits() {
@@ -383,7 +551,32 @@ class SplitFlopController {
       const upBtn = digitElement.querySelector(".digit-btn.up");
       const downBtn = digitElement.querySelector(".digit-btn.down");
 
+      const changeDigit = (increment) => {
+        if (this.calibrationInProgress || !this.motorsHomed) {
+          const msg = this.calibrationInProgress
+            ? "Калібрування триває – зміну цифр заборонено"
+            : "Таймер не відкалібрований – зміну цифр заборонено";
+          this.showToast(msg, "warning");
+          digitNumber.textContent = this.testDigits[index];
+          return;
+        }
+        let newValue = (this.testDigits[index] + increment + 10) % 10;
+        this.testDigits[index] = newValue;
+        digitNumber.textContent = newValue;
+        this.animateFlip(digitNumber);
+        this.calculateEndDate();
+        this.scheduleFullUpdate();
+        this.saveConfig(false);
+      };
+
       digitNumber.addEventListener("click", () => {
+        if (this.calibrationInProgress || !this.motorsHomed) {
+          const msg = this.calibrationInProgress
+            ? "Калібрування триває – зміну цифр заборонено"
+            : "Таймер не відкалібрований – зміну цифр заборонено";
+          this.showToast(msg, "warning");
+          return;
+        }
         let newValue = parseInt(
           prompt(
             `Введіть цифру для сегмента ${index + 1} (0-9):`,
@@ -396,38 +589,13 @@ class SplitFlopController {
           digitNumber.textContent = newValue;
           this.animateFlip(digitNumber);
           this.calculateEndDate();
-
-          if (this.config.timerStopped) {
-            this.setPhysicalDigit(index, newValue);
-          }
-          // Зберігаємо конфігурацію, але без toast
+          this.scheduleFullUpdate();
           this.saveConfig(false);
         }
       });
 
-      upBtn.addEventListener("click", () => {
-        this.testDigits[index] = (this.testDigits[index] + 1) % 10;
-        digitNumber.textContent = this.testDigits[index];
-        this.animateFlip(digitNumber);
-        this.calculateEndDate();
-
-        if (this.config.timerStopped) {
-          this.setPhysicalDigit(index, this.testDigits[index]);
-        }
-        this.saveConfig(false);
-      });
-
-      downBtn.addEventListener("click", () => {
-        this.testDigits[index] = (this.testDigits[index] - 1 + 10) % 10;
-        digitNumber.textContent = this.testDigits[index];
-        this.animateFlip(digitNumber);
-        this.calculateEndDate();
-
-        if (this.config.timerStopped) {
-          this.setPhysicalDigit(index, this.testDigits[index]);
-        }
-        this.saveConfig(false);
-      });
+      upBtn.addEventListener("click", () => changeDigit(1));
+      downBtn.addEventListener("click", () => changeDigit(-1));
     });
   }
 
@@ -447,53 +615,45 @@ class SplitFlopController {
     this.hourDigits = [0, 0];
     this.updateHourDisplay();
 
-    tenUp.addEventListener("click", () => {
-      this.hourDigits[0] = (this.hourDigits[0] + 1) % 3;
-      if (this.hourDigits[0] === 2 && this.hourDigits[1] > 3) {
-        this.hourDigits[1] = 3;
+    const changeHour = (position, increment) => {
+      if (this.calibrationInProgress || !this.motorsHomed) {
+        const msg = this.calibrationInProgress
+          ? "Калібрування триває – зміну години заборонено"
+          : "Таймер не відкалібрований – зміну години заборонено";
+        this.showToast(msg, "warning");
+        return;
       }
-      this.updateHourDisplay();
-      this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
-      this.saveConfig(false);
-    });
-
-    tenDown.addEventListener("click", () => {
-      this.hourDigits[0] = (this.hourDigits[0] - 1 + 3) % 3;
-      if (this.hourDigits[0] === 2 && this.hourDigits[1] > 3) {
-        this.hourDigits[1] = 3;
-      }
-      this.updateHourDisplay();
-      this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
-      this.saveConfig(false);
-    });
-
-    oneUp.addEventListener("click", () => {
-      if (this.hourDigits[0] === 2) {
-        this.hourDigits[1] = (this.hourDigits[1] + 1) % 4;
+      if (position === 0) {
+        this.hourDigits[0] = (this.hourDigits[0] + increment + 3) % 3;
+        if (this.hourDigits[0] === 2 && this.hourDigits[1] > 3) {
+          this.hourDigits[1] = 3;
+        }
       } else {
-        this.hourDigits[1] = (this.hourDigits[1] + 1) % 10;
+        let max = this.hourDigits[0] === 2 ? 4 : 10;
+        this.hourDigits[1] = (this.hourDigits[1] + increment + max) % max;
       }
       this.updateHourDisplay();
       this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
       this.saveConfig(false);
-    });
+    };
 
-    oneDown.addEventListener("click", () => {
-      if (this.hourDigits[0] === 2) {
-        this.hourDigits[1] = (this.hourDigits[1] - 1 + 4) % 4;
-      } else {
-        this.hourDigits[1] = (this.hourDigits[1] - 1 + 10) % 10;
-      }
-      this.updateHourDisplay();
-      this.config.syncHour = this.hourDigits[0] * 10 + this.hourDigits[1];
-      this.saveConfig(false);
-    });
+    tenUp.addEventListener("click", () => changeHour(0, 1));
+    tenDown.addEventListener("click", () => changeHour(0, -1));
+    oneUp.addEventListener("click", () => changeHour(1, 1));
+    oneDown.addEventListener("click", () => changeHour(1, -1));
 
     tenDigit.addEventListener("click", () => this.promptHourDigit(0));
     oneDigit.addEventListener("click", () => this.promptHourDigit(1));
   }
 
   promptHourDigit(position) {
+    if (this.calibrationInProgress || !this.motorsHomed) {
+      const msg = this.calibrationInProgress
+        ? "Калібрування триває – зміну години заборонено"
+        : "Таймер не відкалібрований – зміну години заборонено";
+      this.showToast(msg, "warning");
+      return;
+    }
     let max = position === 0 ? 2 : this.hourDigits[0] === 2 ? 3 : 9;
     let newVal = parseInt(
       prompt(
@@ -543,6 +703,13 @@ class SplitFlopController {
     const cards = document.querySelectorAll(".unit-card");
     cards.forEach((card) => {
       card.addEventListener("click", async () => {
+        if (this.calibrationInProgress || !this.motorsHomed) {
+          const msg = this.calibrationInProgress
+            ? "Калібрування триває – зміну одиниці заборонено"
+            : "Таймер не відкалібрований – зміну одиниці заборонено";
+          this.showToast(msg, "warning");
+          return;
+        }
         const unit = card.dataset.unit;
         this.config.durationUnit = unit;
         this.setActiveUnit(unit);
@@ -742,7 +909,6 @@ class SplitFlopController {
     return parts.join(" ");
   }
 
-  // ========== ІНІЦІАЛІЗАЦІЯ ПОДІЙ ==========
   initEventListeners() {
     document.getElementById("start-date").addEventListener("change", () => {
       if (!this.config.useCurrentOnStart) this.calculateEndDate();
@@ -763,7 +929,7 @@ class SplitFlopController {
 
     document
       .getElementById("btn-save")
-      .addEventListener("click", () => this.saveConfig(true)); // ТУТ true
+      .addEventListener("click", () => this.saveConfig(true));
     document
       .getElementById("btn-sync")
       .addEventListener("click", () => this.syncTime());
@@ -773,6 +939,9 @@ class SplitFlopController {
     document
       .getElementById("btn-start-stop")
       .addEventListener("click", () => this.toggleTimer());
+    document
+      .getElementById("btn-reset")
+      .addEventListener("click", () => this.resetDigits());
 
     const calibrateOnStartBtn = document.getElementById(
       "btn-calibrate-on-start",
@@ -782,6 +951,30 @@ class SplitFlopController {
       this.updateCalibrateOnStartButton();
       this.saveConfig(false);
     });
+  }
+
+  async resetDigits() {
+    if (this.calibrationInProgress || !this.motorsHomed) {
+      const msg = this.calibrationInProgress
+        ? "Калібрування триває – скидання заборонено"
+        : "Таймер не відкалібрований – скидання заборонено";
+      this.showToast(msg, "warning");
+      return;
+    }
+    this.testDigits = [0, 0, 0, 0];
+    this.updateTestDigitsUI();
+    this.calculateEndDate();
+    try {
+      const response = await fetch("/api/reset", { method: "POST" });
+      if (response.ok) {
+        await this.loadConfig();
+        this.showToast("Цифри скинуто до 0", "success");
+      } else {
+        this.showToast("Помилка скидання", "error");
+      }
+    } catch (err) {
+      this.showToast("Помилка скидання", "error");
+    }
   }
 
   updateStartStopButton() {
@@ -811,6 +1004,15 @@ class SplitFlopController {
   }
 
   async toggleTimer() {
+    // Перевірка блокування через стан калібрування
+    if (this.calibrationInProgress || !this.motorsHomed) {
+      const msg = this.calibrationInProgress
+        ? "Калібрування триває – зачекайте"
+        : "Таймер не відкалібрований – виконайте калібрування";
+      this.showToast(msg, "warning");
+      return;
+    }
+
     if (this.config.timerStopped) {
       if (this.calibrateOnStart) {
         this.showToast("Калібрування перед стартом...", "warning");
@@ -857,6 +1059,8 @@ class SplitFlopController {
             this.startMomentStatic = new Date();
           }
           this.calculateEndDate();
+          // Скидаємо прапорець, щоб сповіщення про завершення могло з'явитися знову
+          this.timeoutWarningShown = false;
         }
         this.updateStartStopButton();
         this.showToast(
@@ -897,11 +1101,6 @@ class SplitFlopController {
                 clearInterval(checkInterval);
                 if (stateData.motorsHomed) {
                   this.showToast("Калібрування завершено успішно", "success");
-                  if (this.config.timerStopped) {
-                    this.testDigits = [0, 0, 0, 0];
-                    this.updateTestDigitsUI();
-                    this.saveConfig(false);
-                  }
                   resolve();
                 } else {
                   this.showToast("Калібрування не вдалося", "error");
@@ -941,6 +1140,15 @@ class SplitFlopController {
       if (!response.ok) throw new Error("Network error");
       const data = await response.json();
 
+      // Оновлюємо стан калібрування та моторів
+      if (data.calibrationInProgress !== undefined) {
+        this.calibrationInProgress = data.calibrationInProgress;
+      }
+      if (data.motorsHomed !== undefined) {
+        this.motorsHomed = data.motorsHomed;
+      }
+      this.updateUIBlockedState();
+
       if (data.currentTimeFormatted) {
         document.getElementById("current-time").textContent =
           data.currentTimeFormatted;
@@ -967,11 +1175,15 @@ class SplitFlopController {
           detailed;
       }
 
-      if (data.timeRemaining === "Час вийшов" && !this.timeoutWarningShown) {
+      // ВИЯВЛЕННЯ ЗАВЕРШЕННЯ ВІДЛІКУ за рядком "Час вийшов"
+      if (
+        data.timeRemaining &&
+        data.timeRemaining.trim() === "Час вийшов" &&
+        !this.timeoutWarningShown
+      ) {
         this.timeoutWarningShown = true;
+        console.log("Countdown finished, showing notification");
         this.showCountdownFinishedNotification(data);
-      } else if (data.timeRemaining !== "Час вийшов") {
-        this.timeoutWarningShown = false;
       }
 
       if (data.motorsHomed !== undefined) {
@@ -1029,6 +1241,7 @@ class SplitFlopController {
     }
   }
 
+  // ========== ПЕРСИСТЕНТНЕ СПОВІЩЕННЯ ПРО ЗАВЕРШЕННЯ ==========
   showCountdownFinishedNotification(data) {
     const startTime = data.startTimestamp
       ? new Date(data.startTimestamp * 1000)

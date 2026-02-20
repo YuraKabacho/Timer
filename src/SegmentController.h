@@ -64,4 +64,10 @@ int* getCurrentDigits();
  */
 void updateTimer();
 
+/**
+ * Set flag to start timer after current movement finishes.
+ * Used when starting the timer to ensure digits are set first.
+ */
+void setStartAfterMovement(bool enable);
+
 #endif

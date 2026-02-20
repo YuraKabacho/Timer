@@ -70,7 +70,7 @@ void broadcastState() {
     doc["startTime"] = formatTime(config.startTime);
     doc["useCurrentOnStart"] = config.useCurrentOnStart;
     doc["startTimestamp"] = config.startTime;
-    doc["calibrateOnStart"] = config.calibrateOnStart;   // new field
+    doc["calibrateOnStart"] = config.calibrateOnStart;
 
     // Remaining seconds (safe 64‑bit)
     if (!timerStopped && configManager.isTimerActive()) {
@@ -340,12 +340,14 @@ void setupWebServer() {
 
         if (isTimerStopped()) {
             int targetValue = configManager.getCurrentValueRemaining();
+            // Встановлюємо прапорець, що після руху треба запустити таймер
+            setStartAfterMovement(true);
             updateAllSegments(targetValue);
             if (config.useCurrentOnStart) {
                 config.startTime = time(nullptr);
                 configManager.save();
             }
-            startTimer();
+            // startTimer() буде викликано після завершення руху в SegmentController
             request->send(200, "application/json", "{\"status\":\"started\"}");
         } else {
             stopTimer();
@@ -367,6 +369,16 @@ void setupWebServer() {
         } else {
             request->send(429, "application/json", "{\"error\":\"Calibration already in progress\"}");
         }
+    });
+
+    // Новий ендпоінт для скидання цифр на 0
+    server.on("/api/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
+        auto& config = configManager.getConfig();
+        config.duration.value = 0;
+        configManager.save();
+        updateAllSegments(0);
+        broadcastState();
+        request->send(200, "application/json", "{\"success\":true}");
     });
 
     server.on("/api/test", HTTP_POST, [](AsyncWebServerRequest *request) {

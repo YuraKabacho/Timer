@@ -3,7 +3,7 @@
 
 #include "ConfigManager.h"
 #include "SegmentController.h"
-#include "TimerController.h"  // for stopTimer()
+#include "TimerController.h"  // for stopTimer() and startTimer()
 
 // External references
 extern ConfigManager configManager;
@@ -18,12 +18,12 @@ extern void broadcastState();
 #define PCF1_ADDRESS 0x20          // I2C address for first PCF8575 (segments 0,1)
 #define PCF2_ADDRESS 0x21          // I2C address for second PCF8575 (segments 2,3)
 
-const int STEPS_PER_REV = 4076;    // 28BYJ-48 full rotation steps (with gearbox)
+const int STEPS_PER_REV = 4080;    // 28BYJ-48 full rotation steps (with gearbox)
 const int DIGITS = 10;             // 0-9
 const int STEPS_PER_DIGIT = STEPS_PER_REV / DIGITS; // ~407 steps per digit
 
 // Homing offset steps after hitting Hall sensor (to align digit 0)
-const int OFFSETS[4] = {100, 100, 100, 100}; // same for all segments
+const int OFFSET = 0;             // однаковий для всіх сегментів
 
 // -------------------------------------------------------------------
 // Digit position mapping (forward rotation order)
@@ -49,6 +49,8 @@ const uint8_t steps[8] = {
 // Base pin index for each motor on its PCF8575 (4 consecutive pins per motor)
 const int MOTOR_BASES[4] = {3, 11, 3, 11};
 
+const int HALL_PINS[2] = {8, 9};
+
 // Current step index (0-7) for each motor
 int stepIndices[4] = {0,0,0,0};
 
@@ -60,8 +62,8 @@ bool motorsHomed = true;           // assume homed until calibration needed
 bool calibrationInProgress = false;
 
 // Current output states for the two PCF8575 (both outputs always written together)
-uint16_t motorState1 = (1 << 1) | (1 << 9);  // default: Hall pull‑ups active
-uint16_t motorState2 = (1 << 1) | (1 << 9);
+uint16_t motorState1 = (1 << 8) | (1 << 9);  // default: Hall pull‑ups active
+uint16_t motorState2 = (1 << 8) | (1 << 9);
 
 unsigned long lastUpdate = 0;
 const unsigned long UPDATE_INTERVAL = 1000;  // timer check interval
@@ -75,6 +77,9 @@ TaskHandle_t motorTaskHandle = NULL;
 volatile int targetDisplayValue = -1;         // desired 4‑digit value
 volatile bool motorTaskActive = false;
 SemaphoreHandle_t motorMutex = NULL;
+
+// Прапорець, що після завершення руху треба запустити таймер
+volatile bool startAfterMovement = false;
 
 // -------------------------------------------------------------------
 // Low‑level I2C write to a PCF8575
@@ -92,7 +97,7 @@ void writePCF(uint8_t address, uint16_t state) {
 // -------------------------------------------------------------------
 bool readHallSensor(int segmentIndex) {
     int pcfAddress = (segmentIndex < 2) ? PCF1_ADDRESS : PCF2_ADDRESS;
-    int pin = (segmentIndex % 2 == 0) ? 1 : 9;   // Hall on pin 1 (even) or 9 (odd)
+    int pin = HALL_PINS[segmentIndex % 2];   // Hall on pins 8 or 9
 
     Wire.requestFrom((uint8_t)pcfAddress, (uint8_t)2);
     if (Wire.available()) {
@@ -157,7 +162,7 @@ bool homeSegment(int segmentIndex) {
     Serial.printf("[HALL] Segment %d TRIGGERED at step %d\n", segmentIndex, safety);
 
     // Move additional offset steps to align digit 0 with window
-    for (int i = 0; i < OFFSETS[segmentIndex]; i++) {
+    for (int i = 0; i < OFFSET; i++) {
         stepMotor(segmentIndex, homeDirection);
         taskYIELD();
     }
@@ -192,6 +197,7 @@ bool calibrateAllSegments() {
 void calibrationTask(void *pvParameters) {
     Serial.println("Calibration task started");
     calibrationInProgress = true;
+    motorsHomed = false;                // під час калібрування двигуни не готові
     bool result = calibrateAllSegments();
     if (!result) {
         Serial.println("Calibration failed!");
@@ -323,6 +329,12 @@ void motorControlTask(void *pvParameters) {
             }
         }
 
+        // Якщо був запит на запуск таймера після руху, виконуємо
+        if (startAfterMovement) {
+            startTimer();   // з TimerController
+            startAfterMovement = false;
+        }
+
         // If another movement was requested while we were moving, loop again
         if (targetDisplayValue == value) {
             targetDisplayValue = -1;   // done
@@ -340,9 +352,21 @@ void motorControlTask(void *pvParameters) {
 }
 
 // -------------------------------------------------------------------
+// Public: set flag to start timer after current movement finishes.
+// -------------------------------------------------------------------
+void setStartAfterMovement(bool enable) {
+    startAfterMovement = enable;
+}
+
+// -------------------------------------------------------------------
 // Public: start non‑blocking movement to a 4‑digit value.
 // -------------------------------------------------------------------
 void startMotorMovement(int value) {
+    // Не запускаємо рух, якщо триває калібрування
+    if (calibrationInProgress) {
+        Serial.println("Calibration in progress – movement ignored");
+        return;
+    }
     if (!motorsHomed) {
         Serial.println("Motors not homed – movement ignored");
         return;
@@ -352,6 +376,11 @@ void startMotorMovement(int value) {
     int currentValue = currentDigits[0]*1000 + currentDigits[1]*100 + currentDigits[2]*10 + currentDigits[3];
     if (currentValue == value) {
         Serial.printf("Value %d already displayed – skipping motor movement\n", value);
+        // Якщо є запит на запуск, все одно запускаємо таймер (без руху)
+        if (startAfterMovement) {
+            startTimer();
+            startAfterMovement = false;
+        }
         return;
     }
 
@@ -406,21 +435,25 @@ void setAllSegmentsValue(int value) {
 
 // -------------------------------------------------------------------
 // Timer update: called from loop() every second.
-// If timer is active, computes remaining value and moves digits.
-// Also triggers auto‑calibration when countdown reaches zero.
+// If timer is running, compute remaining value and move digits.
+// If countdown finished, stop timer and start calibration.
 // -------------------------------------------------------------------
 void updateTimer() {
     unsigned long now = millis();
     if (now - lastUpdate >= UPDATE_INTERVAL) {
         lastUpdate = now;
-        if (configManager.isTimerActive() && !timerStopped) {
-            int remaining = configManager.getCurrentValueRemaining();
-            updateAllSegments(remaining);
 
-            // If countdown finished, stop timer and recalibrate
+        // Якщо таймер не зупинено (тобто він має працювати)
+        if (!timerStopped) {
+            int remaining = configManager.getCurrentValueRemaining();
             if (remaining <= 0) {
-                stopTimer();
-                startCalibration();      // auto‑calibration
+                // Час вийшов
+                stopTimer();               // встановлює timerStopped = true
+                startCalibration();         // запускаємо калібрування
+                Serial.println("Countdown finished – timer stopped and calibration started");
+            } else {
+                // Оновлюємо сегменти до поточного залишку
+                updateAllSegments(remaining);
             }
         }
     }
